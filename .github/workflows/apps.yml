@@ -24,6 +24,8 @@ jobs:
       - name: 装 Electron
         working-directory: apps/desktop
         run: npm ci --no-audit --no-fund && npm run sync
+      - name: 装 Playwright（只用来启动 Electron，不下载浏览器；版本和本机测试用的一样）
+        run: npm install --no-save --no-audit --no-fund playwright@1.63.0
       - name: Windows 程序端到端
         run: xvfb-run -a node test/desktop.e2e.mjs
 
@@ -77,7 +79,9 @@ jobs:
           ./gradlew assembleRelease --no-daemon --stacktrace
           mkdir -p "$RUNNER_TEMP/out"
           cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/out/WeiyangAgent-1.0.${GITHUB_RUN_NUMBER}-android.apk"
-          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$RUNNER_TEMP/out/"*.apk | head -3
+          # 机器上可能装了好几个版本的 build-tools：用最新的那个检查签名
+          APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner"
+          "$APKSIGNER" verify --print-certs "$RUNNER_TEMP/out/"*.apk | head -3
       - uses: actions/upload-artifact@v4
         with:
           name: android
