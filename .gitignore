@@ -1,0 +1,7 @@
+node_modules/
+# 密钥、密码和运行数据只留在服务器上，绝不进仓库（仓库是公开的）
+.env
+*.env
+config.local.json
+data/
+*.log
