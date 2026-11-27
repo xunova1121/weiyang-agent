@@ -23,11 +23,14 @@ docker compose logs -f    # 看到“未央 Agent 版已启动”就好了
 ## 部署方式二：直接装在服务器上（Ubuntu / Debian）
 
 需要 Node.js 20 以上。想开放运行命令还要 `apt install bubblewrap socat`；没装就不开放，其他功能照常。
+**Ubuntu 23.10 起（含 24.04）** 系统默认拦着沙箱，还要装一条只放行 bubblewrap 的 AppArmor 规则（见下面的步骤；GitHub 上的自动测试就是在 Ubuntu 24.04 上装了这条规则跑的）。
 
 ```bash
 sudo apt install -y bubblewrap socat
 sudo useradd --system --home /var/lib/weiyang-agent --create-home weiyang
 sudo git clone https://github.com/xunova1121/weiyang-agent.git /opt/weiyang-agent
+# 只在 Ubuntu 23.10+（含 24.04）需要：放行沙箱
+sudo cp /opt/weiyang-agent/deploy/apparmor-bwrap /etc/apparmor.d/weiyang-bwrap && sudo apparmor_parser -r /etc/apparmor.d/weiyang-bwrap
 cd /opt/weiyang-agent && sudo npm ci --omit=dev      # 国内加 --registry=https://registry.npmmirror.com
 printf 'WEIYANG_PASSWORD=改成你的密码\nDEEPSEEK_API_KEY=你的密钥\n' | sudo tee /etc/weiyang-agent.env >/dev/null
 sudo chmod 600 /etc/weiyang-agent.env

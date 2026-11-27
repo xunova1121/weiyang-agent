@@ -1,0 +1,11 @@
+# Ubuntu 23.10 起（含 24.04）默认不许普通程序创建“用户命名空间”，沙箱（bubblewrap）因此起不来。
+# 这条规则只放行 /usr/bin/bwrap 这一个程序，是 Ubuntu 官方推荐的做法（比整机关掉限制更窄）。
+# 安装：sudo cp deploy/apparmor-bwrap /etc/apparmor.d/weiyang-bwrap && sudo apparmor_parser -r /etc/apparmor.d/weiyang-bwrap
+abi <abi/4.0>,
+include <tunables/global>
+
+profile weiyang-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/weiyang-bwrap>
+}

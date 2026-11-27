@@ -56,6 +56,16 @@ export function sandboxStatus({ spawn = spawnSync } = {}) {
   } catch { return 'missing'; }
 }
 
+/** 沙箱装了却起不来时，按环境告诉用户怎么办 */
+export function blockedHint({ readFile = fs.readFileSync, exists = fs.existsSync } = {}) {
+  const head = '沙箱（bubblewrap）装了但起不来，不开放“跑命令”（其他功能照常）。';
+  let restricted = false;
+  try { restricted = String(readFile('/proc/sys/kernel/apparmor_restrict_unprivileged_userns', 'utf8')).trim() === '1'; } catch { /* 没有这项就不是 Ubuntu 的限制 */ }
+  if (restricted) return head + 'Ubuntu 23.10 起默认拦着它，装上仓库里的规则后重启：sudo cp deploy/apparmor-bwrap /etc/apparmor.d/weiyang-bwrap && sudo apparmor_parser -r /etc/apparmor.d/weiyang-bwrap';
+  if (exists('/.dockerenv')) return head + '在 Docker 里要加 --security-opt seccomp=unconfined --security-opt systempaths=unconfined（见 README）。';
+  return head + '请看 README 的“运行命令”说明。';
+}
+
 /**
  * 跑命令的沙箱：只能写工作文件夹；数据目录里除工作文件夹外（配置、令牌、对话记录）都看不到；不能联网；
  * 模型密钥不进命令的环境变量。spike/sandbox.mjs 实测过这几条。沙箱起不来就报错，不退回到沙箱外面跑。

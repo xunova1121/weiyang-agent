@@ -6,7 +6,7 @@ import path from 'node:path';
 import { checkConfig, loadConfig } from '../server/config.mjs';
 import { createAuth } from '../server/auth.mjs';
 import { checkToolPaths, insideWorkspace } from '../server/pathGuard.mjs';
-import { agentEnv, QUIET_ENV, sandboxStatus } from '../server/agentRunner.mjs';
+import { agentEnv, blockedHint, QUIET_ENV, sandboxStatus } from '../server/agentRunner.mjs';
 import { createTasks } from '../server/tasks.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'wa-'));
@@ -120,4 +120,10 @@ test('沙箱检查：缺 socat 或 bubblewrap 算“没装齐”；装了起不�
   assert.equal(sandboxStatus({ spawn: fake({ socat: 0 }) }), 'missing', '缺 bubblewrap');
   assert.equal(sandboxStatus({ spawn: fake({ socat: 0, bwrap: 1 }) }), 'blocked');
   assert.equal(sandboxStatus({ spawn: fake({ socat: 0, bwrap: 0 }) }), 'ok');
+});
+
+test('沙箱起不来时按环境给出办法：Ubuntu 的 AppArmor 限制、Docker、其他', () => {
+  assert.match(blockedHint({ readFile: () => '1\n', exists: () => false }), /apparmor-bwrap/);
+  assert.match(blockedHint({ readFile: () => { throw new Error('none'); }, exists: (p) => p === '/.dockerenv' }), /systempaths=unconfined/);
+  assert.match(blockedHint({ readFile: () => '0', exists: () => false }), /README/);
 });

@@ -11,12 +11,14 @@ import { startFakeModel, startLoggingProxy } from './fakeModel.mjs';
 import { createAuth } from '../server/auth.mjs';
 import { createTasks } from '../server/tasks.mjs';
 import { createHttpServer } from '../server/http.mjs';
-import { runAgent, sandboxAvailable } from '../server/agentRunner.mjs';
+import { blockedHint, runAgent, sandboxStatus } from '../server/agentRunner.mjs';
 import { createSessions, useConfigDir } from '../server/sessions.mjs';
 
 const PASSWORD = 'batch2-password';
 const KEY = 'THE-REAL-LOOKING-KEY';
-const HAS_SANDBOX = sandboxAvailable();
+const SANDBOX = sandboxStatus();
+const HAS_SANDBOX = SANDBOX === 'ok';
+const SKIP_WHY = SANDBOX === 'missing' ? '本机沙箱没装齐（apt install bubblewrap socat）' : blockedHint();
 let model, proxy, server, base, cfg, token, ws;
 
 before(async () => {
@@ -120,7 +122,7 @@ test('对话列表：刚聊的出现在列表里；能读出历史（含工具�
   assert.equal((await call('/api/sessions/not-a-real-id')).status, 404, '乱填的编号不出错');
 });
 
-test('跑命令（沙箱）：要确认；只能写工作文件夹；看不到配置和密钥；不能联网', { skip: HAS_SANDBOX ? false : '本机没有 bubblewrap，跑命令不开放（服务器上 apt install bubblewrap）' }, async () => {
+test('跑命令（沙箱）：要确认；只能写工作文件夹；看不到配置和密钥；不能联网', { skip: HAS_SANDBOX ? false : SKIP_WHY }, async () => {
   const run = async (command) => {
     const r = await ask('跑命令 ' + command, { decide: () => 'allow' });
     assert.ok(r.evs.some((e) => e.type === 'permission' && e.name === 'Bash' && e.input.command === command), '跑命令前弹了确认框');
@@ -136,6 +138,10 @@ test('跑命令（沙箱）：要确认；只能写工作文件夹；看不到�
   const denied = await ask('跑命令 echo should-not-run > denied.txt', { decide: () => 'deny' });
   assert.match(denied.text, /工具失败/);
   assert.equal(fs.existsSync(path.join(ws, 'denied.txt')), false, '拒绝后命令没跑');
+});
+
+test('要求沙箱的环境里（GitHub 自动测试装了 AppArmor 规则）沙箱必须真能用，不能悄悄跳过', { skip: process.env.REQUIRE_SANDBOX === '1' ? false : '没要求' }, () => {
+  assert.equal(SANDBOX, 'ok', SKIP_WHY);
 });
 
 test('全程没有往外连', () => {

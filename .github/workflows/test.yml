@@ -14,5 +14,13 @@ jobs:
           cache: npm
       - name: 装沙箱工具（运行命令的测试要用；起不来时那项测试会跳过并说明原因）
         run: sudo apt-get update && sudo apt-get install -y bubblewrap socat
+      # Ubuntu 24.04 默认拦着沙箱：装上仓库里的 AppArmor 规则，顺便验证这条规则在真机上管用
+      - name: 放行沙箱（AppArmor 规则）
+        run: |
+          sudo cp deploy/apparmor-bwrap /etc/apparmor.d/weiyang-bwrap
+          sudo apparmor_parser -r /etc/apparmor.d/weiyang-bwrap
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net true && echo "沙箱能用了"
+      - name: 要求沙箱测试真的跑（不许跳过）
+        run: echo "REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm test
