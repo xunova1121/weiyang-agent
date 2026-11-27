@@ -222,7 +222,7 @@ export function tools(ctx) {
   if (ctx.cfg.apiKey) {
     out.push({
       name: 'deepseek_search',
-      description: 'DeepSeek 官方联网搜索：DeepSeek 自己搜索网页并写出带来源编号的回答。适合要综合多个网页的问题；简单查一下也行。deep=true 时搜得更深、更慢。',
+      description: 'DeepSeek 官方联网搜索：DeepSeek 自己搜索网页并写出带来源编号的回答。比较慢（一次十几秒，deep=true 更慢）：有百度搜索（web_search）时先用百度；百度查不到、或要综合很多网页时再用它。一个问题一般查一次就够，别对同一件事反复查。',
       schema: { question: z.string().describe('要查的问题，写完整'), deep: z.boolean().optional().describe('复杂问题设为 true') },
       risk: 'read',
       run: (a) => deepseekWeb(ctx, { mode: a.deep ? 'deep' : 'quick', question: a.question })

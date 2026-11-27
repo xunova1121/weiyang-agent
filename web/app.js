@@ -771,13 +771,16 @@ function speakButton(bubble) {
   return b;
 }
 
+const TOOL_NAMES = { deepseek_search: 'DeepSeek 联网', web_search: '百度搜索', read_url: '读网页', read_image: '识图', ask_file: '看文件', create_document: '做文档', read_document: '读文档', convert_to_pdf: '转 PDF', recalc_excel: 'Excel 重算', search_conversations: '翻旧对话', Bash: '跑命令', Read: '读文件', Write: '写文件', Edit: '改文件', Skill: '读技能' };
 /** 回复下面一行小字：用了多久（排查“回答慢”：是等第一个字久，还是步骤多） */
 function timingLine(bubble, t) {
   if (!t || !t.total) return;
   const s = (ms) => (ms / 1000).toFixed(1);
   const el = document.createElement('div');
   el.className = 'timing';
-  el.textContent = [`用时 ${s(t.total)} 秒`, t.first ? `第一个字 ${s(t.first)} 秒` : '', t.calls > 1 ? `调了 ${t.calls} 次模型` : '', t.thinkingChars ? `先想了 ${t.thinkingChars} 字` : ''].filter(Boolean).join(' · ');
+  const tools = (t.tools || []).filter((x) => x.ms >= 1000).slice(0, 3).map((x) => `${TOOL_NAMES[x.name] || x.name}${x.n > 1 ? ` ${x.n} 次` : ''} ${s(x.ms)} 秒`);
+  el.textContent = [`用时 ${s(t.total)} 秒`, t.first ? `第一个字 ${s(t.first)} 秒` : '', t.calls > 1 ? `调了 ${t.calls} 次模型` : '', t.thinkingChars ? `先想了 ${t.thinkingChars} 字` : '',
+    ...tools, t.waitMs > 1000 ? `等确认 ${s(t.waitMs)} 秒` : ''].filter(Boolean).join(' · ');
   (bubble.nextElementSibling?.classList.contains('speak') ? bubble.nextElementSibling : bubble).after(el);
 }
 

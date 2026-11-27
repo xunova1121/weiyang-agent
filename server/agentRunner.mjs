@@ -97,7 +97,7 @@ export function systemAppend({ commands, officeSkills = false, memory = '', epis
     '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
     '用户在中国大陆，时间按北京时间。',
     '没做过、没核实过的事不要说成已完成；工具失败或被用户拒绝要如实说明。同一件事连续失败两次就停下，告诉用户卡在哪里、你建议怎么办，不要换着法子一直硬试（每条命令用户都要点确认）。',
-    '问到最新消息、新闻、价格、天气等时效内容时，先用联网搜索工具查（有百度搜索用百度，也可以用 DeepSeek 联网；用户给了网址就读网页），回答里带上来源链接；需要今天日期时调用当前时间工具。没查到就说没查到，不要编。',
+    '问到最新消息、新闻、价格、天气等时效内容时，先用联网搜索工具查（有百度搜索 web_search 就先用它，快；DeepSeek 联网一次要十几秒，百度查不到或要综合很多网页时才用；用户给了网址就读网页），一个问题一般查一次就够，回答里带上来源链接；需要今天日期时调用当前时间工具。没查到就说没查到，不要编。',
     '你只能在当前工作文件夹里读写文件。新建或修改文件前，用户会看到确认框，拒绝了就不要换个办法硬做。',
     commands
       ? '可以运行命令，但每次都要用户同意；命令在隔离环境里跑，不能联网，只能改工作文件夹。'
@@ -221,7 +221,9 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
   const toolBox = createToolBox(cfg, { ...(toolModules && { modules: toolModules }), settings, sessionId });
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
   // 用时（每条回复下面显示，也记日志）：第一个字、模型调了几次、先想了多少字
-  const timing = { firstText: 0, calls: 0, thinkingChars: 0 };
+  const timing = { firstText: 0, calls: 0, thinkingChars: 0, waitMs: 0 };
+  const toolStart = new Map(); // 工具调用编号 → { name, at }
+  const toolUse = new Map(); // 工具名 → { n, ms }（从模型说要用到拿到结果，含等确认的时间）
   let thinkingShownAt = 0;
   try {
     const q = queryImpl({
@@ -246,7 +248,9 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
           if ((!tools.includes(name) && custom !== 'write') || !ask) return { behavior: 'deny', message: `没有开放“${name}”这个工具` };
           const turnGrants = (current && sessionGrants.get(current)) || pending;
           if (turnGrants.has(name)) return { behavior: 'allow' };
+          const askedAt = Date.now();
           const decision = await ask({ name, input: forDisplay(input, workspace), signal: toolSignal });
+          timing.waitMs += Date.now() - askedAt; // 等用户点确认的时间（不算慢在程序上）
           if (decision === 'always') {
             if (current) grant(current, name); else pending.add(name);
             return { behavior: 'allow', updatedPermissions: suggestions ?? [] };
@@ -303,6 +307,7 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
             full += block.text;
             emit({ type: 'text', delta: block.text });
           } else if (block.type === 'tool_use') {
+            if (!m.parent_tool_use_id) toolStart.set(block.id, { name: block.name, at: Date.now() });
             emit({ type: 'tool', id: block.id, name: block.name, input: block.input });
           }
         }
@@ -311,7 +316,16 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
         const content = m.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
-            if (block.type === 'tool_result') emit({ type: 'tool_result', id: block.tool_use_id, ok: !block.is_error, summary: resultSummary(block.content) });
+            if (block.type !== 'tool_result') continue;
+            const st = toolStart.get(block.tool_use_id);
+            if (st) {
+              toolStart.delete(block.tool_use_id);
+              const name = String(st.name).replace(/^mcp__weiyang__/, '');
+              const u = toolUse.get(name) ?? { n: 0, ms: 0 };
+              u.n++; u.ms += Date.now() - st.at;
+              toolUse.set(name, u);
+            }
+            emit({ type: 'tool_result', id: block.tool_use_id, ok: !block.is_error, summary: resultSummary(block.content) });
           }
         }
       } else if (m.type === 'result') {
@@ -325,8 +339,10 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
           return;
         }
         const total = Date.now() - t0;
-        console.log(`[用时] ${conn.model}：第一个字 ${(timing.firstText / 1000).toFixed(1)} 秒，共 ${(total / 1000).toFixed(1)} 秒，调了 ${timing.calls} 次模型${timing.thinkingChars ? `，先想了 ${timing.thinkingChars} 字` : ''}`);
-        emit({ type: 'done', text: full || m.result || '', sessionId: current, ms: total, timing: { first: timing.firstText, total, calls: timing.calls, thinkingChars: timing.thinkingChars } });
+        const tools = [...toolUse].map(([name, u]) => ({ name, n: u.n, ms: u.ms })).sort((a, b) => b.ms - a.ms);
+        const toolText = tools.map((t) => `${t.name} ${t.n} 次 ${(t.ms / 1000).toFixed(1)} 秒`).join('、');
+        console.log(`[用时] ${conn.model}：第一个字 ${(timing.firstText / 1000).toFixed(1)} 秒，共 ${(total / 1000).toFixed(1)} 秒，调了 ${timing.calls} 次模型${timing.thinkingChars ? `，先想了 ${timing.thinkingChars} 字` : ''}${toolText ? `；工具：${toolText}` : ''}${timing.waitMs > 500 ? `；其中等确认 ${(timing.waitMs / 1000).toFixed(1)} 秒` : ''}`);
+        emit({ type: 'done', text: full || m.result || '', sessionId: current, ms: total, timing: { first: timing.firstText, total, calls: timing.calls, thinkingChars: timing.thinkingChars, tools, waitMs: timing.waitMs } });
         return;
       }
     }

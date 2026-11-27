@@ -55,3 +55,44 @@ test('系统提示开头没有按对话变化的标记；两段不同的新对�
   assert.equal(JSON.stringify(b.system), sys, '系统提示一样');
   assert.equal(JSON.stringify(b.tools), JSON.stringify(a.tools), '工具说明一样');
 });
+
+/** 发消息，碰到确认框时等 delayMs 再点允许（模拟用户看一眼再点） */
+async function askWithApproval(text, delayMs) {
+  const res = await fetch(base + '/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token, Accept: 'text/event-stream' }, body: JSON.stringify({ text }) });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  const evs = [];
+  let buf = '', id = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const data = buf.slice(0, i).split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+      buf = buf.slice(i + 2);
+      if (!data) continue;
+      const ev = JSON.parse(data);
+      evs.push(ev);
+      if (ev.type === 'task_created') id = ev.id;
+      if (ev.type === 'permission') {
+        await new Promise((r) => setTimeout(r, delayMs));
+        await fetch(`${base}/api/tasks/${id}/permission`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ requestId: ev.requestId, decision: 'allow' }) });
+      }
+    }
+  }
+  return evs.at(-1);
+}
+
+test('用时里记下每个工具花了多久、等确认花了多久（排查“慢在工具还是慢在模型”）', async () => {
+  const quick = await askWithApproval('调用工具 mcp__weiyang__current_time {}', 0);
+  assert.equal(quick.type, 'done');
+  assert.equal(quick.timing.calls, 2, '用工具前后各一次模型');
+  assert.deepEqual(quick.timing.tools.map((t) => [t.name, t.n]), [['current_time', 1]]);
+  assert.ok(quick.timing.waitMs < 500, '查资料的工具不用等确认');
+  const slow = await askWithApproval('调用工具 mcp__weiyang__remember {"text":"用户喜欢喝茶"}', 1200);
+  assert.equal(slow.type, 'done');
+  const r = slow.timing.tools.find((t) => t.name === 'remember');
+  assert.ok(r && r.ms >= 1200, `工具用时含等确认：${JSON.stringify(slow.timing)}`);
+  assert.ok(slow.timing.waitMs >= 1100, '等确认的时间单独记');
+});
