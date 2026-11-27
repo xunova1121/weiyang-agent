@@ -3,7 +3,8 @@
 #   bash /opt/weiyang-agent/deploy/update.sh
 # 规则：
 #   - 只拉 stable 分支：GitHub 上自动测试全过的版本才会进 stable，没测过的代码不会装到服务器上
-#   - 连不上 GitHub 就这次不更新，下次再试（国内常见的 Empty reply 换用 HTTP/1.1）
+#   - 先直连 GitHub，不通再走加速镜像；经镜像拿到的要和 GitHub 接口给的版本编号核对一致才装
+#   - 都连不上就这次不更新，下次再试（国内常见的 Empty reply 换用 HTTP/1.1）
 #   - 有回复正在进行（数据目录里有 .busy）就先不重启，下次再试
 #   - 依赖有变化时先在旁边装好，装不上就这次不更新，正在用的版本一点不动
 #   - 更新后服务起不来，自动退回上一个版本
@@ -33,16 +34,43 @@ export PATH
 cd "$APP" || { say "没有 $APP"; exit 1; }
 [ -d .git ] || { say "$APP 不是用 git 装的（可能是上传的压缩包），不能自动更新"; exit 0; }
 
-fetched=0
-for i in 1 2 3; do
-  if git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=60 fetch -q origin "$BRANCH" 2>/dev/null; then fetched=1; break; fi
-  [ "$i" -lt 3 ] && sleep 20
+# 先直连 GitHub，不通再依次走加速镜像（国内服务器常常直连不通）。“-”表示直连
+REPO_URL="${UPDATE_REPO_URL:-$(git remote get-url origin)}"
+read -ra MIRRORS <<< "${UPDATE_MIRRORS:-- https://ghfast.top/ https://gh-proxy.com/ https://ghproxy.net/}"
+VIA=""
+for m in "${MIRRORS[@]}"; do
+  [ "$m" = - ] && m=""
+  if timeout 120 git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch -q "${m}${REPO_URL}" "$BRANCH" 2>/dev/null; then VIA="${m:-直连}"; break; fi
 done
-[ "$fetched" = 1 ] || { say "这次连不上 GitHub，下次再试"; exit 0; }
+[ -n "$VIA" ] || { say "这次直连和镜像都连不上 GitHub，下次再试"; exit 0; }
 
 OLD="$(git rev-parse HEAD)"
 NEW="$(git rev-parse FETCH_HEAD)"
-[ "$OLD" = "$NEW" ] && { say "已是最新（${OLD:0:7}）"; exit 0; }
+[ "$OLD" = "$NEW" ] && { say "已是最新（${OLD:0:7}，经$VIA）"; exit 0; }
+
+# 经镜像拿到的：镜像是别人的服务器，可能被篡改。向 GitHub 接口直接要 stable 的版本编号核对，
+# 编号一致就说明内容和 GitHub 上的一字不差（git 按内容算编号）；对不上就不装。
+# 接口也连不上时默认这次不装；在 /etc/weiyang-agent.env 里写 UPDATE_TRUST_MIRROR=1 才直接信任镜像（和原未央的做法一样）
+if [ "$VIA" != 直连 ]; then
+  OWNER_REPO="$(printf '%s' "$REPO_URL" | sed -E 's#^https://github.com/##; s#\.git$##')"
+  SHA_URL="${UPDATE_SHA_URL:-https://api.github.com/repos/$OWNER_REPO/commits/$BRANCH}"
+  EXPECTED=""
+  for _ in 1 2 3; do
+    EXPECTED="$(curl -fsS -m 15 -H 'Accept: application/vnd.github.sha' "$SHA_URL" 2>/dev/null | tr -d '[:space:]')"
+    [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]] && break
+    EXPECTED=""; sleep 5
+  done
+  TRUST="$(sed -n 's/^UPDATE_TRUST_MIRROR=//p' /etc/weiyang-agent.env 2>/dev/null | tail -1)"
+  if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$NEW" ]; then
+    say "经 $VIA 拿到的 ${NEW:0:7} 和 GitHub 上的 ${EXPECTED:0:7} 对不上，可能被篡改，不装"; exit 0
+  elif [ -z "$EXPECTED" ] && [ "$TRUST" != 1 ]; then
+    say "经 $VIA 拿到 ${NEW:0:7}，但连不上 GitHub 接口核对编号，这次不装（要信任镜像就在 /etc/weiyang-agent.env 加 UPDATE_TRUST_MIRROR=1）"; exit 0
+  elif [ -z "$EXPECTED" ]; then
+    say "经 $VIA 拿到 ${NEW:0:7}，连不上 GitHub 接口核对，按设置信任镜像"
+  else
+    say "经 $VIA 拿到 ${NEW:0:7}，已和 GitHub 上的编号核对一致"
+  fi
+fi
 # 上次装了起不来、已经退回的版本：不再反复试（否则每 30 分钟重启一次），等出了更新的版本再装
 FAILED_MARK="$DATA/.update-failed"
 if [ "$(cat "$FAILED_MARK" 2>/dev/null)" = "$NEW" ]; then say "${NEW:0:7} 上次装了起不来，已跳过，等下一个版本"; exit 0; fi
