@@ -1,0 +1,5 @@
+{
+  "name": "weiyang-office",
+  "version": "1.0.0",
+  "description": "Anthropic 的 docx / pptx / xlsx 文档技能（Apache 2.0），作为未央文档引擎的补充：改已有文件、修订和批注、复杂表格公式与重算"
+}

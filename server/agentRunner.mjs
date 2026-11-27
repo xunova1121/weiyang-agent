@@ -17,6 +17,7 @@ import { pathGuardHooks } from './pathGuard.mjs';
 import { configDir } from './sessions.mjs';
 import { createToolBox } from './tools/index.mjs';
 import { createMemory } from './memory.mjs';
+import { PLUGIN_DIR, SKILL_NAMES, SKILLS_DIR } from './officeSkills.mjs';
 
 /** 关掉统计、错误上报、自动更新等非必要外连（spike 实测：不关会连 api.anthropic.com，关了一次都不连） */
 export const QUIET_ENV = {
@@ -80,12 +81,14 @@ export function sandboxSettings(cfg) {
     allowUnsandboxedCommands: false,
     autoAllowBashIfSandboxed: false,
     network: { allowedDomains: [], strictAllowlist: true },
-    filesystem: { allowWrite: [workspace], denyRead: [cfg.dataDir], allowRead: [workspace] },
+    // 文档技能要用 LibreOffice：它只会在 /tmp 或 /var/tmp 建通信管道（写死的），所以开了技能时多放开 /var/tmp 一处可写。
+    // 配置、密钥、对话记录照旧看不到，照旧不能联网。
+    filesystem: { allowWrite: [workspace, ...(cfg.officeSkills ? ['/var/tmp'] : [])], denyRead: [cfg.dataDir], allowRead: [workspace] },
     credentials: { envVars: [{ name: 'ANTHROPIC_AUTH_TOKEN', mode: 'deny' }, { name: 'ANTHROPIC_API_KEY', mode: 'deny' }] }
   };
 }
 
-export function systemAppend({ commands, memory = '' }) {
+export function systemAppend({ commands, officeSkills = false, memory = '' }) {
   return [
     '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
     '用户在中国大陆，时间按北京时间。',
@@ -97,6 +100,7 @@ export function systemAppend({ commands, memory = '' }) {
       : '这台服务器没有开放运行命令，需要时请告诉用户。',
     '用户上传的图片、PDF、表格在工作文件夹里：只要上面的文字用识别文字工具（read_image），要看懂图或就文件回答问题用 ask_file；用户提到“这张图”“我发的文件”时先用 Glob 找最近上传的文件。',
     '要做 Word、PPT、Excel、PDF 文件时用 create_document（先把内容用 Markdown 写好，排版交给它），不要自己拼文件或写代码生成；读 Word、PPT、Excel、PDF 用 read_document。生成后按回执告诉用户文件路径，用户在“文件”里下载。',
+    ...(officeSkills ? ['文档分工：新建 Word / PPT / Excel / PDF 一律用 create_document（中文排版、公文、汇报 PPT 都做好了）；只有改用户已有的文件（保留原格式改字、修订痕迹、批注、按用户给的模板填写、往已有 PPT 加删页）、复杂 Excel 公式和重算、create_document 做不到的要求，才用 docx / pptx / xlsx 技能（Skill 工具）。技能里的命令一律写 python3（不是 python），脚本用技能目录的绝对路径，输出文件放工作文件夹里；用技能新建文件时也不要 npm install（不能联网）。'] : []),
     '用户说“记住……”或说了以后用得上的称呼、偏好时，用记忆工具记下来（会先问用户）；不要记密码、密钥、证件号。',
     ...(memory ? [memory] : [])
   ].join('\n');
@@ -187,7 +191,9 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
   let current = sessionId;
   let announced = false;
   let fatalReason = null; // 不可重试的模型错误，停下时报这个而不是“已停止”
-  const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : [])];
+  // 文档技能要跑命令：沙箱开放、库也装齐（main.mjs 里检查过）才启用
+  const skillsOn = Boolean(cfg.commands && cfg.officeSkills);
+  const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : []), ...(skillsOn ? ['Skill'] : [])];
   // 自定义工具（联网搜索、记忆、文档……）：每轮新建一份，见 tools/
   const toolBox = createToolBox(cfg, { ...(toolModules && { modules: toolModules }), settings });
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
@@ -199,14 +205,15 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
         env: agentEnv({ ...cfg, ...conn }, { home, extra: extraEnv }),
         model: conn.model,
         settingSources: [], // 不读服务器上任何 ~/.claude 或项目里的设置、规则
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands), memory: createMemory(cfg.dataDir).promptBlock() }) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands), officeSkills: skillsOn, memory: createMemory(cfg.dataDir).promptBlock() }) },
         tools,
         // 不用 allowedTools 免确认：每次调用都先过路径守卫钩子，再由下面的 canUseTool 决定
         permissionMode: 'default',
         mcpServers: { weiyang: toolBox.server },
         canUseTool: async (name, input, { signal: toolSignal, suggestions }) => {
           const custom = toolBox.riskOf(name);
-          if (READ_ONLY_TOOLS.includes(name) || custom === 'read') return { behavior: 'allow' };
+          // Skill 只是把技能说明读进来，真干活的命令另外要确认
+          if (READ_ONLY_TOOLS.includes(name) || custom === 'read' || (skillsOn && name === 'Skill')) return { behavior: 'allow' };
           if ((!tools.includes(name) && custom !== 'write') || !ask) return { behavior: 'deny', message: `没有开放“${name}”这个工具` };
           const decision = await ask({ name, input: forDisplay(input, workspace), signal: toolSignal });
           if (decision === 'always') return { behavior: 'allow', updatedPermissions: suggestions ?? [] };
@@ -214,7 +221,8 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
           return { behavior: 'deny', message: decision === 'timeout' ? '用户太久没回应，这一步没做' : '用户拒绝了这一步' };
         },
         ...(cfg.commands && { sandbox: sandboxSettings(cfg) }),
-        hooks: pathGuardHooks(workspace), // 路径只许在工作文件夹里（见 pathGuard.mjs）
+        hooks: pathGuardHooks(workspace, { readOnly: skillsOn ? [SKILLS_DIR] : [] }), // 路径只许在工作文件夹里（技能目录只许读，见 pathGuard.mjs）
+        ...(skillsOn && { plugins: [{ type: 'local', path: PLUGIN_DIR }], skills: SKILL_NAMES }),
         includePartialMessages: true,
         // SDK 子进程的报错只记在服务器日志里（排查用），不发给网页
         stderr: (d) => { const line = String(d).trim(); if (line && !/CLAUDE_SDK_CAN_USE_TOOL_SHADOWED|unrecognized_model/.test(line)) console.warn('[SDK]', line.slice(0, 500)); },

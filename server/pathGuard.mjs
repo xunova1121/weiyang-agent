@@ -36,24 +36,32 @@ export function insideWorkspace(workspace, value) {
   return target === root || target.startsWith(root + path.sep);
 }
 
-/** 检查一次工具调用，返回 null 表示放行，否则返回拒绝原因 */
-export function checkToolPaths(workspace, toolName, input) {
+const READ_TOOLS = ['Read', 'Glob', 'Grep'];
+
+/**
+ * 检查一次工具调用，返回 null 表示放行，否则返回拒绝原因。
+ * readOnly：另外只许“读”的目录（文档技能的说明和脚本）；写、改文件永远只许在工作文件夹。
+ */
+export function checkToolPaths(workspace, toolName, input, { readOnly = [] } = {}) {
   const fields = PATH_FIELDS[toolName];
   if (!fields) return null; // 别的工具由工具白名单管；跑命令（Bash）的路径由沙箱管，见 agentRunner.sandboxSettings
   for (const f of fields) {
-    if (!insideWorkspace(workspace, input?.[f])) return `只能访问工作文件夹里的文件（${f}: ${String(input[f]).slice(0, 120)}）`;
+    const v = input?.[f];
+    // 只读目录要写绝对路径（相对路径一律按工作文件夹算）
+    if (READ_TOOLS.includes(toolName) && v && path.isAbsolute(String(v)) && readOnly.some((root) => insideWorkspace(root, v))) continue;
+    if (!insideWorkspace(workspace, v)) return `只能访问工作文件夹里的文件（${f}: ${String(input[f]).slice(0, 120)}）`;
   }
   return null;
 }
 
-export function pathGuardHooks(workspace) {
+export function pathGuardHooks(workspace, { readOnly = [] } = {}) {
   const deny = (reason) => ({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
   return {
     PreToolUse: [{
       onFailure: 'block',
       hooks: [async (input) => {
         try {
-          const why = checkToolPaths(workspace, input.tool_name, input.tool_input);
+          const why = checkToolPaths(workspace, input.tool_name, input.tool_input, { readOnly });
           return why ? deny(why) : {};
         } catch {
           return deny('路径检查出错，已拒绝');

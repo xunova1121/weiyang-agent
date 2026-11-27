@@ -10,6 +10,7 @@ import { busyMarker } from './busy.mjs';
 import { createSettings } from './settings.mjs';
 import { createMemory } from './memory.mjs';
 import { startOpenAIBridge } from './openaiBridge.mjs';
+import { officeSkillsStatus } from './officeSkills.mjs';
 
 let cfg;
 try { cfg = loadConfig(); }
@@ -19,6 +20,12 @@ const sandbox = cfg.commandsSetting === 'off' ? 'off' : sandboxStatus();
 cfg.commands = sandbox === 'ok';
 if (sandbox === 'missing') console.warn('沙箱没装齐（要 bubblewrap 和 socat），不开放“跑命令”。装上后重启即可：apt install bubblewrap socat');
 if (sandbox === 'blocked') console.warn(blockedHint());
+// 文档技能（改已有 Word/PPT/Excel）要在沙箱里跑 Python 脚本：开放了运行命令、库也装齐才启用
+if (cfg.commands) {
+  const office = officeSkillsStatus();
+  cfg.officeSkills = office.status === 'ok';
+  if (!cfg.officeSkills) console.warn(`文档技能（改已有 Word/PPT/Excel）没启用：缺 ${office.missing.join('、')}。装法：sudo bash deploy/install-office.sh，装好重启服务`);
+}
 useConfigDir(cfg);
 
 const auth = createAuth({ password: cfg.password, dataDir: cfg.dataDir });
@@ -27,4 +34,4 @@ const settings = createSettings(cfg);
 const bridge = await startOpenAIBridge({ getProvider: (id) => settings.provider(id) });
 const tasks = createTasks({ run: (o) => runAgent(cfg, { ...o, settings, bridge }), onBusy: busyMarker(cfg.dataDir) });
 const server = createHttpServer({ auth, tasks, cfg, settings, memory: createMemory(cfg.dataDir), sessions: createSessions(cfg), files: createFiles(workspaceDir(cfg)) });
-server.listen(cfg.port, cfg.host, () => console.log(`未央 Agent 版已启动：http://${cfg.host}:${cfg.port}（模型 ${cfg.model}，接口 ${cfg.baseUrl}，跑命令${cfg.commands ? '已开放（沙箱内，每次需确认）' : '未开放'}）`));
+server.listen(cfg.port, cfg.host, () => console.log(`未央 Agent 版已启动：http://${cfg.host}:${cfg.port}（模型 ${cfg.model}，接口 ${cfg.baseUrl}，跑命令${cfg.commands ? '已开放（沙箱内，每次需确认）' : '未开放'}，文档技能${cfg.officeSkills ? '已启用' : '未启用'}）`));

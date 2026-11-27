@@ -20,8 +20,13 @@ jobs:
           sudo cp deploy/apparmor-bwrap /etc/apparmor.d/weiyang-bwrap
           sudo apparmor_parser -r /etc/apparmor.d/weiyang-bwrap
           bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid --unshare-net true && echo "沙箱能用了"
-      - name: 要求沙箱测试真的跑（不许跳过）
-        run: echo "REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
+      # 用和服务器上一样的脚本装文档技能要的东西（顺便在干净的 Ubuntu 24.04 上演练这个脚本）
+      - name: 装文档技能的依赖（deploy/install-office.sh）
+        run: sudo env PIP_INDEX=https://pypi.org/simple SKIP_RESTART=1 bash deploy/install-office.sh
+      - name: 要求沙箱和文档技能的测试真的跑（不许跳过）
+        run: |
+          echo "REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
+          echo "REQUIRE_OFFICE_SKILLS=1" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm test
 

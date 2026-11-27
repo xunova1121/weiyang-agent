@@ -126,7 +126,15 @@ npm start            # 默认 http://0.0.0.0:8797
 - `read_document`：读 Word、PPT、Excel（含公式清单）、文字版 PDF。
 - **PDF**：服务器装了 LibreOffice 时先排成 Word 再转 PDF（和 Word 版一样）；没装就做成 A4 可打印网页，并告诉你用浏览器“打印 → 另存为 PDF”。
   想要真 PDF，在服务器上装 LibreOffice 和中文字体（OpenCloudOS / CentOS 大概是 `dnf install -y libreoffice-writer google-noto-sans-cjk-ttc-fonts`，包名以系统为准，**没在你的服务器上试过**），装好重启服务即可，不用改配置。
-- 还没做：原未央里的“按模板排版”“图片还原 Excel”“生成后让模型自查一轮”“PPT 配图”；Anthropic 的文档技能（改已有文件、复杂表格）作为补充，下一批接。
+- 还没做：原未央里的“按模板排版”“图片还原 Excel”“生成后让模型自查一轮”“PPT 配图”。
+
+### 补充：Anthropic 的文档技能（改已有文件）
+
+`skills/weiyang-office/` 里原样带着 Anthropic 公开的 docx / pptx / xlsx 技能（Apache 2.0，来源和许可见那里的 `NOTICE.md` 和各自的 `LICENSE.txt`），作为本地插件交给 SDK。
+- **分工**（写在系统提示里）：新建文件一律用上面的 `create_document`；改用户已有的文件（保留原格式改字、修订痕迹、批注、按用户的模板填、增删 PPT 页）、复杂 Excel 公式和重算，才用技能。
+- 技能靠在沙箱里跑 Python 脚本，所以**要开放“运行命令”，并装好依赖**：`sudo bash deploy/install-office.sh`（Python 库、LibreOffice、中文字体、gcc）。没装齐时启动日志会说缺什么，技能不启用，其他功能照常。
+- 技能脚本的每条命令照样先弹确认框。技能目录对模型只读（读文件工具能读，写不了）。
+- 开了技能时沙箱**多放开一处 `/var/tmp` 可写**：LibreOffice 只会在 `/tmp` 或 `/var/tmp` 建通信管道（写死的），不放开就转不了 PDF、算不了公式。配置、密钥、对话记录照旧看不到，照旧不能联网（测试里验证过）。
 
 ## 长期记忆
 
