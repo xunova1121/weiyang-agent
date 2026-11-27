@@ -2,7 +2,8 @@
  * 测试用的假模型（Anthropic Messages 接口格式，流式）和“记录外连”的代理。
  * 假模型按最后一条用户消息决定怎么回：
  *   - 含“读文件 X” → 先调用 Read 工具读 X，拿到工具结果后把结果原样复述
- *   - 含“跑命令”   → 调用 Bash（应被拒绝或根本不可用）
+ *   - 含“写文件 X 内容” → 调用 Write
+ *   - 含“跑命令 X”  → 调用 Bash 执行 X（默认 cat /etc/hostname）
  *   - 其他          → 回“收到：<原话>（历史 N 条）”
  */
 import http from 'node:http';
@@ -44,8 +45,12 @@ export function startFakeModel() {
       blocks = [{ type: 'text', text: `工具${last.toolResult.is_error ? '失败' : '成功'}：${flat(last.toolResult.content).slice(0, 200)}` }];
     } else if (/读文件 (\S+)/.test(last.text)) {
       blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name: 'Read', input: { file_path: last.text.match(/读文件 (\S+)/)[1] } }];
+    } else if (/写文件 (\S+) (.+)/.test(last.text)) {
+      const [, file_path, content] = last.text.match(/写文件 (\S+) (.+)/);
+      blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name: 'Write', input: { file_path, content } }];
     } else if (/跑命令/.test(last.text)) {
-      blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name: 'Bash', input: { command: 'cat /etc/hostname' } }];
+      const command = last.text.match(/跑命令 (.+)/)?.[1] || 'cat /etc/hostname';
+      blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name: 'Bash', input: { command, description: '测试命令' } }];
     } else {
       const users = (j.messages || []).filter((m) => m.role === 'user').length;
       blocks = [{ type: 'text', text: `收到：${last.text}（历史 ${users} 条）` }];

@@ -5,6 +5,11 @@
  *   POST /api/tasks                {text, sessionId?}；带 Accept: text/event-stream 时同一连接直接推事件
  *   GET  /api/tasks/:id/events?after=N   断线后按序号续接（事件流）
  *   POST /api/tasks/:id/stop
+ *   POST /api/tasks/:id/permission   {requestId, decision: allow|always|deny}  回答“允许/拒绝”确认框
+ *   GET  /api/sessions                对话列表
+ *   GET  /api/sessions/:id            一段对话的历史
+ *   POST /api/sessions/:id/rename     {title}
+ *   DELETE /api/sessions/:id
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
  */
@@ -66,7 +71,7 @@ function serveStatic(req, res, pathname) {
   fs.createReadStream(file).pipe(res);
 }
 
-export function createHttpServer({ auth, tasks, cfg }) {
+export function createHttpServer({ auth, tasks, cfg, sessions }) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     const { pathname } = url;
@@ -80,7 +85,21 @@ export function createHttpServer({ auth, tasks, cfg }) {
         const token = bearer(req);
         if (!auth.check(token)) return json(res, 401, { error: '登录已失效，请重新登录' });
         if (pathname === '/api/logout' && req.method === 'POST') { auth.logout(token); return json(res, 200, { ok: true }); }
-        if (pathname === '/api/status' && req.method === 'GET') return json(res, 200, { ok: true, model: cfg.model, running: tasks.running });
+        if (pathname === '/api/status' && req.method === 'GET') {
+          const running = tasks.running && tasks.get(tasks.running);
+          return json(res, 200, { ok: true, model: cfg.model, commands: Boolean(cfg.commands), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
+        }
+        if (pathname === '/api/sessions' && req.method === 'GET') return json(res, 200, await sessions.list());
+        const sm = pathname.match(/^\/api\/sessions\/([\w-]+)(\/rename)?$/);
+        if (sm) {
+          const [, id, rename] = sm;
+          if (!rename && req.method === 'GET') { const s = await sessions.get(id); return s ? json(res, 200, s) : json(res, 404, { error: '找不到这段对话' }); }
+          if (rename && req.method === 'POST') return (await sessions.rename(id, (await readJson(req)).title ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: '找不到这段对话' });
+          if (!rename && req.method === 'DELETE') {
+            if (tasks.running && tasks.get(tasks.running)?.sessionId === id) return json(res, 409, { error: '这段对话正在回复，先停止再删' });
+            return (await sessions.remove(id)) ? json(res, 200, { ok: true }) : json(res, 404, { error: '找不到这段对话' });
+          }
+        }
         if (pathname === '/api/tasks' && req.method === 'POST') {
           const body = await readJson(req);
           const text = String(body.text ?? '').trim();
@@ -92,11 +111,17 @@ export function createHttpServer({ auth, tasks, cfg }) {
           if (/text\/event-stream/.test(String(req.headers.accept || ''))) return streamTask(req, res, tasks, r.task.id, 0, { type: 'task_created', id: r.task.id });
           return json(res, 200, r.task);
         }
-        const m = pathname.match(/^\/api\/tasks\/([\w-]+)\/(events|stop)$/);
+        const m = pathname.match(/^\/api\/tasks\/([\w-]+)\/(events|stop|permission)$/);
         if (m) {
           if (!tasks.get(m[1])) return json(res, 404, { error: '找不到这个任务（可能服务器重启过）' });
           if (m[2] === 'events' && req.method === 'GET') return streamTask(req, res, tasks, m[1], Math.max(0, Number(url.searchParams.get('after')) || 0));
           if (m[2] === 'stop' && req.method === 'POST') { tasks.stop(m[1]); return json(res, 200, { ok: true }); }
+          if (m[2] === 'permission' && req.method === 'POST') {
+            const body = await readJson(req);
+            return tasks.answer(m[1], String(body.requestId ?? ''), String(body.decision ?? ''))
+              ? json(res, 200, { ok: true })
+              : json(res, 409, { error: '这个确认已经回答过或已过期' });
+          }
         }
         return json(res, 404, { error: '没有这个接口' });
       }

@@ -9,10 +9,12 @@
  * 模型走 DeepSeek 的 Anthropic 兼容接口（ANTHROPIC_BASE_URL）。传给 SDK 的环境变量只给必需的几项，
  * 不把服务器自身的环境（含登录密码）带进去；并关掉非必要外连——实测关掉后不再连 Anthropic 的服务器。
  */
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { pathGuardHooks } from './pathGuard.mjs';
+import { configDir } from './sessions.mjs';
 
 /** 关掉统计、错误上报、自动更新等非必要外连（spike 实测：不关会连 api.anthropic.com，关了一次都不连） */
 export const QUIET_ENV = {
@@ -23,17 +25,52 @@ export const QUIET_ENV = {
 };
 
 /**
- * 第一版只放开只读工具：看文件、找文件、搜内容。改文件、跑命令要等第二批的“允许/拒绝”弹框做好才开。
- * WebSearch 是 Anthropic 服务器端的搜索，接 DeepSeek 用不了，不放。
+ * 工具分三档：
+ *   只读（看、找、搜文件）：直接放行；
+ *   改文件（新建、修改）：每次先问用户；
+ *   跑命令：每次先问用户，而且只在 SDK 自带沙箱里跑（服务器装了 bubblewrap 才开放）。
+ * 三档都先过路径守卫，只许在工作文件夹里。WebSearch 是 Anthropic 服务器端的搜索，接 DeepSeek 用不了，不放。
  */
 export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
+export const WRITE_TOOLS = ['Write', 'Edit'];
+export const COMMAND_TOOLS = ['Bash'];
 
-export const SYSTEM_APPEND = [
-  '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
-  '用户在中国大陆，时间按北京时间。',
-  '没做过、没核实过的事不要说成已完成；工具失败要如实说明。',
-  '你只能在当前工作文件夹里读文件；改文件、运行命令目前还没开放，需要时请告诉用户。'
-].join('\n');
+/** 服务器能不能用沙箱（bubblewrap）：能才开放跑命令 */
+export function sandboxAvailable() {
+  try {
+    const r = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-net', 'true'], { timeout: 5000, stdio: 'ignore' });
+    return r.status === 0;
+  } catch { return false; }
+}
+
+/**
+ * 跑命令的沙箱：只能写工作文件夹；数据目录里除工作文件夹外（配置、令牌、对话记录）都看不到；不能联网；
+ * 模型密钥不进命令的环境变量。spike/sandbox.mjs 实测过这几条。沙箱起不来就报错，不退回到沙箱外面跑。
+ */
+export function sandboxSettings(cfg) {
+  const workspace = path.join(cfg.dataDir, 'workspace');
+  return {
+    enabled: true,
+    failIfUnavailable: true,
+    allowUnsandboxedCommands: false,
+    autoAllowBashIfSandboxed: false,
+    network: { allowedDomains: [], strictAllowlist: true },
+    filesystem: { allowWrite: [workspace], denyRead: [cfg.dataDir], allowRead: [workspace] },
+    credentials: { envVars: [{ name: 'ANTHROPIC_AUTH_TOKEN', mode: 'deny' }, { name: 'ANTHROPIC_API_KEY', mode: 'deny' }] }
+  };
+}
+
+export function systemAppend({ commands }) {
+  return [
+    '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
+    '用户在中国大陆，时间按北京时间。',
+    '没做过、没核实过的事不要说成已完成；工具失败或被用户拒绝要如实说明。',
+    '你只能在当前工作文件夹里读写文件。新建或修改文件前，用户会看到确认框，拒绝了就不要换个办法硬做。',
+    commands
+      ? '可以运行命令，但每次都要用户同意；命令在隔离环境里跑，不能联网，只能改工作文件夹。'
+      : '这台服务器没有开放运行命令，需要时请告诉用户。'
+  ].join('\n');
+}
 
 /** SDK 进程的环境变量：只放必需项，不继承服务器的 process.env */
 export function agentEnv(cfg, { home, extra = {} } = {}) {
@@ -41,6 +78,7 @@ export function agentEnv(cfg, { home, extra = {} } = {}) {
     PATH: process.env.PATH,
     LANG: 'C.UTF-8',
     HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, '.claude'), // 和本进程读对话列表用同一个目录（见 sessions.mjs）
     ANTHROPIC_BASE_URL: cfg.baseUrl,
     ANTHROPIC_AUTH_TOKEN: cfg.apiKey,
     ANTHROPIC_MODEL: cfg.model,
@@ -54,6 +92,13 @@ const short = (v, n = 300) => {
   return s.length > n ? s.slice(0, n) + '…' : s;
 };
 
+/** 确认框里显示的参数：文件路径换成工作文件夹里的相对路径（好读，也不暴露服务器目录） */
+export function forDisplay(input, workspace) {
+  if (!input || typeof input.file_path !== 'string') return input;
+  const rel = path.relative(workspace, input.file_path);
+  return rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? { ...input, file_path: rel } : input;
+}
+
 function resultSummary(content) {
   if (typeof content === 'string') return short(content);
   if (Array.isArray(content)) return short(content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n'));
@@ -61,12 +106,13 @@ function resultSummary(content) {
 }
 
 /**
- * @param {object} cfg  loadConfig() 的结果
- * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, signal?: AbortSignal, extraEnv?: object, queryImpl?: Function }} o
+ * @param {object} cfg  loadConfig() 的结果（commands：是否开放跑命令）
+ * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, ask: (req: object) => Promise<'allow'|'always'|'deny'>,
+ *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function }} o
  */
-export async function runAgent(cfg, { text, sessionId = null, emit, signal, extraEnv, queryImpl = query }) {
+export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal, extraEnv, queryImpl = query }) {
   const workspace = path.join(cfg.dataDir, 'workspace');
-  const home = path.join(cfg.dataDir, 'home'); // SDK 的对话记录存在这里（.claude/projects）
+  const home = path.dirname(configDir(cfg)); // SDK 的对话记录存在这里（.claude/projects）
   fs.mkdirSync(workspace, { recursive: true });
   fs.mkdirSync(home, { recursive: true });
   const abortController = new AbortController();
@@ -77,6 +123,7 @@ export async function runAgent(cfg, { text, sessionId = null, emit, signal, extr
   let full = '';
   let current = sessionId;
   let announced = false;
+  const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : [])];
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
   try {
     const q = queryImpl({
@@ -86,14 +133,19 @@ export async function runAgent(cfg, { text, sessionId = null, emit, signal, extr
         env: agentEnv(cfg, { home, extra: extraEnv }),
         model: cfg.model,
         settingSources: [], // 不读服务器上任何 ~/.claude 或项目里的设置、规则
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: SYSTEM_APPEND },
-        tools: READ_ONLY_TOOLS,
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands) }) },
+        tools,
         // 不用 allowedTools 免确认：每次调用都先过路径守卫钩子，再由下面的 canUseTool 决定
         permissionMode: 'default',
-        // 兜底：列表外的工具一律拒绝（第二批改成问用户）
-        canUseTool: async (name) => (READ_ONLY_TOOLS.includes(name)
-          ? { behavior: 'allow' }
-          : { behavior: 'deny', message: `第一版还没开放“${name}”这个工具` }),
+        canUseTool: async (name, input, { signal: toolSignal, suggestions }) => {
+          if (READ_ONLY_TOOLS.includes(name)) return { behavior: 'allow' };
+          if (!tools.includes(name) || !ask) return { behavior: 'deny', message: `没有开放“${name}”这个工具` };
+          const decision = await ask({ name, input: forDisplay(input, workspace), signal: toolSignal });
+          if (decision === 'always') return { behavior: 'allow', updatedPermissions: suggestions ?? [] };
+          if (decision === 'allow') return { behavior: 'allow' };
+          return { behavior: 'deny', message: decision === 'timeout' ? '用户太久没回应，这一步没做' : '用户拒绝了这一步' };
+        },
+        ...(cfg.commands && { sandbox: sandboxSettings(cfg) }),
         hooks: pathGuardHooks(workspace), // 路径只许在工作文件夹里（见 pathGuard.mjs）
         includePartialMessages: true,
         maxTurns: 30,
@@ -134,6 +186,8 @@ export async function runAgent(cfg, { text, sessionId = null, emit, signal, extr
           }
         }
       } else if (m.type === 'result') {
+        // 用户点了停止：不管 SDK 最后报的是什么，都算“已停止”
+        if (abortController.signal.aborted) { emit({ type: 'stopped', sessionId: current }); return; }
         if (m.subtype !== 'success' || m.is_error) {
           const why = m.subtype === 'error_max_turns' ? '步骤太多，先停下了' : m.result || m.subtype;
           emit({ type: 'error', error: `没有顺利完成：${why}`, sessionId: current });

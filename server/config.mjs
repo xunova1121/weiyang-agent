@@ -3,7 +3,7 @@
  *
  * 必填：WEIYANG_PASSWORD（至少 8 位）、DEEPSEEK_API_KEY（或 MODEL_API_KEY）。
  * 选填：MODEL_BASE_URL（默认 DeepSeek 的 Anthropic 兼容接口）、MODEL（默认 deepseek-flash）、
- *       PORT（默认 8787）、HOST（默认 0.0.0.0）、DATA_DIR（默认 ./data）。
+ *       PORT（默认 8787）、HOST（默认 0.0.0.0）、DATA_DIR（默认 ./data）、ALLOW_COMMANDS（auto / off）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,7 +27,9 @@ export function loadConfig(env = process.env) {
     baseUrl: (env.MODEL_BASE_URL ?? file.baseUrl ?? DEFAULTS.baseUrl).replace(/\/+$/, ''),
     model: env.MODEL ?? file.model ?? DEFAULTS.model,
     port: Number(env.PORT ?? file.port ?? DEFAULTS.port),
-    host: env.HOST ?? file.host ?? DEFAULTS.host
+    host: env.HOST ?? file.host ?? DEFAULTS.host,
+    // 跑命令：auto = 服务器有沙箱（bubblewrap）就开放；off = 不开放。没有沙箱时一律不开放，不退回到沙箱外面跑
+    commandsSetting: String(env.ALLOW_COMMANDS ?? file.allowCommands ?? 'auto')
   };
   const problems = checkConfig(cfg);
   if (problems.length) throw Object.assign(new Error('配置不完整：' + problems.join('；')), { problems });

@@ -1,5 +1,5 @@
 /**
- * 工具只许碰工作文件夹：读文件、找文件、搜内容的路径一律先换成真实路径再核对，
+ * 工具只许碰工作文件夹：读、找、搜、写、改文件的路径一律先换成真实路径再核对，
  * 不在工作文件夹里（含 ../ 跳出、绝对路径、符号链接指向外面）就拒绝。
  * 数据目录里的配置（含模型密钥）、登录令牌、对话记录都在工作文件夹外面，模型读不到。
  *
@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /** 各工具里表示路径的参数 */
-const PATH_FIELDS = { Read: ['file_path'], Glob: ['path', 'pattern'], Grep: ['path', 'glob'] };
+const PATH_FIELDS = { Read: ['file_path'], Glob: ['path', 'pattern'], Grep: ['path', 'glob'], Write: ['file_path'], Edit: ['file_path'] };
 
 function realOrResolved(p) {
   // 文件还不存在时 realpath 会失败：退回到最近一层存在的父目录的真实路径
@@ -39,7 +39,7 @@ export function insideWorkspace(workspace, value) {
 /** 检查一次工具调用，返回 null 表示放行，否则返回拒绝原因 */
 export function checkToolPaths(workspace, toolName, input) {
   const fields = PATH_FIELDS[toolName];
-  if (!fields) return null; // 别的工具由工具白名单管
+  if (!fields) return null; // 别的工具由工具白名单管；跑命令（Bash）的路径由沙箱管，见 agentRunner.sandboxSettings
   for (const f of fields) {
     if (!insideWorkspace(workspace, input?.[f])) return `只能访问工作文件夹里的文件（${f}: ${String(input[f]).slice(0, 120)}）`;
   }

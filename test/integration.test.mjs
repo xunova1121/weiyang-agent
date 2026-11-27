@@ -74,7 +74,8 @@ test('发消息：同一连接先回任务编号，再逐段推回复；模型�
   assert.equal(req.body.model, 'deepseek-flash');
   // DeferredToolPlaceholder 是 SDK 自带的内部占位项（工具延迟加载用），不是能读写的工具
   const toolNames = (req.body.tools || []).map((t) => t.name).filter((n) => n !== 'DeferredToolPlaceholder').sort();
-  assert.deepEqual(toolNames, ['Glob', 'Grep', 'Read'], '第一版只给只读工具');
+  // 第二批起：只读 + 改文件（改文件每次要确认）；没开放跑命令时不给 Bash
+  assert.deepEqual(toolNames, ['Edit', 'Glob', 'Grep', 'Read', 'Write'], '没开放跑命令时只给读写文件的工具');
   // 接着上一轮
   const second = await ask('再说一句', first.sessionId);
   assert.equal(second.end.type, 'done');
@@ -94,7 +95,8 @@ test('工具：能读工作文件夹里的文件；读不到外面的配置（�
   assert.doesNotMatch(JSON.stringify(absolute.evs), /SECRET-IN-CONFIG/);
   const bash = await ask('跑命令');
   assert.equal(bash.end.type, 'done');
-  assert.match(bash.text, /工具失败/, '命令没有被执行');
+  assert.match(bash.text, /工具失败/, '没开放跑命令时命令没有被执行');
+  assert.ok(!bash.evs.some((e) => e.type === 'permission'), '没开放的工具不弹确认框，直接拒绝');
 });
 
 test('断线续接：从中途的序号接着收，只补后面的事件', async () => {

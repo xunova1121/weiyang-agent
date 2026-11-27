@@ -28,7 +28,34 @@ button.danger { background: var(--danger); color: #fff; }
 .login label { display: grid; gap: 6px; color: var(--muted); }
 .login input { font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 
-.chat { display: flex; flex-direction: column; height: 100%; max-width: 860px; margin: 0 auto; }
+.app { display: flex; height: 100%; }
+.side { width: 260px; flex: none; display: flex; flex-direction: column; gap: 8px; padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px)); border-right: 1px solid var(--line); background: var(--panel); }
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.side-head button { padding: 6px 12px; font-size: 14px; }
+.sessions { list-style: none; margin: 0; padding: 0; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.sessions li { display: flex; align-items: center; gap: 2px; border-radius: 10px; }
+.sessions li.active { background: var(--user); }
+.sessions li > button.open { flex: 1; min-width: 0; text-align: left; background: transparent; color: var(--fg); padding: 8px 10px; }
+.sessions .title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sessions .when { display: block; font-size: 12px; color: var(--muted); }
+.sessions li > button.mini { background: transparent; color: var(--muted); padding: 4px 6px; font-size: 13px; }
+.muted { color: var(--muted); font-size: 14px; }
+.scrim { display: none; }
+#toggle-side { display: none; }
+@media (max-width: 760px) {
+  #toggle-side { display: inline-block; }
+  .side { position: fixed; inset: 0 auto 0 0; width: min(300px, 85vw); z-index: 20; transform: translateX(-100%); transition: transform .2s ease; box-shadow: 0 0 24px #0003; }
+  .side.open { transform: none; }
+  .scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 10; background: #0004; }
+}
+.chat { display: flex; flex-direction: column; height: 100%; flex: 1; min-width: 0; max-width: 860px; margin: 0 auto; }
+.chat-title { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask { align-self: stretch; border: 1px solid var(--accent); background: var(--panel); border-radius: 12px; padding: 10px 12px; display: grid; gap: 8px; }
+.ask .what { font-weight: 600; }
+.ask pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow: auto; font-size: 13px; background: var(--tool); border-radius: 8px; padding: 8px; }
+.ask .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ask .actions .ghost { border: 1px solid var(--line); }
+.ask .answered { color: var(--muted); font-size: 13px; }
 .bar { display: flex; align-items: center; gap: 8px; padding: calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; border-bottom: 1px solid var(--line); }
 .bar strong { font-size: 17px; }
 .status { flex: 1; color: var(--muted); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

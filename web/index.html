@@ -15,20 +15,31 @@
       <p id="login-error" class="error" role="alert"></p>
     </form>
   </main>
-  <main id="chat" class="chat" hidden>
-    <header class="bar">
-      <strong>未央</strong>
-      <span id="status" class="status"></span>
-      <button id="new-chat" type="button" class="ghost">新对话</button>
-      <button id="logout" type="button" class="ghost">退出</button>
-    </header>
-    <section id="transcript" class="transcript" aria-live="polite"></section>
-    <form id="composer" class="composer">
-      <textarea id="prompt" rows="1" placeholder="说点什么…" title="Enter 发送，Shift+Enter 换行" required></textarea>
-      <button id="send" type="submit">发送</button>
-      <button id="stop" type="button" class="danger" hidden>停止</button>
-    </form>
-  </main>
+  <div id="chat" class="app" hidden>
+    <aside id="side" class="side" aria-label="对话列表">
+      <div class="side-head">
+        <strong>对话</strong>
+        <button id="new-chat" type="button">＋ 新对话</button>
+      </div>
+      <ul id="sessions" class="sessions"></ul>
+      <p id="sessions-empty" class="muted" hidden>还没有对话</p>
+      <button id="logout" type="button" class="ghost">退出登录</button>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+    <main class="chat">
+      <header class="bar">
+        <button id="toggle-side" type="button" class="ghost" aria-controls="side" aria-expanded="false">☰</button>
+        <strong id="chat-title" class="chat-title">新对话</strong>
+        <span id="status" class="status"></span>
+      </header>
+      <section id="transcript" class="transcript" aria-live="polite"></section>
+      <form id="composer" class="composer">
+        <textarea id="prompt" rows="1" placeholder="说点什么…" title="Enter 发送，Shift+Enter 换行" required></textarea>
+        <button id="send" type="submit">发送</button>
+        <button id="stop" type="button" class="danger" hidden>停止</button>
+      </form>
+    </main>
+  </div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

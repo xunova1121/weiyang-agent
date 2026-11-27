@@ -12,6 +12,7 @@ import { createAuth } from '../server/auth.mjs';
 import { createTasks } from '../server/tasks.mjs';
 import { createHttpServer } from '../server/http.mjs';
 import { runAgent } from '../server/agentRunner.mjs';
+import { createSessions, useConfigDir } from '../server/sessions.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -25,7 +26,8 @@ fs.mkdirSync(path.join(dataDir, 'workspace'), { recursive: true });
 fs.writeFileSync(path.join(dataDir, 'workspace', 'note.txt'), '浏览器里读到的笔记');
 const cfg = { dataDir, password: 'web-password-1', apiKey: 'fake', baseUrl: model.url, model: 'deepseek-flash' };
 const extraEnv = { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
-const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv }) }), cfg });
+useConfigDir(cfg);
+const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv }) }), cfg, sessions: createSessions(cfg) });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
@@ -57,14 +59,79 @@ try {
     await page.reload();
     await page.waitForSelector('#chat:not([hidden])');
     check(`${label} 刷新后仍是登录状态`, true);
+    await page.waitForFunction(() => [...document.querySelectorAll('.msg.user')].some((n) => n.textContent === '你好') && document.querySelector('.tool'));
+    check(`${label} 刷新后之前的消息和工具步骤还在`, true);
     await page.fill('#prompt', '还记得吗');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => [...document.querySelectorAll('.msg.agent')].some((n) => /收到：还记得吗（历史 [3-9] 条）/.test(n.textContent)));
     check(`${label} 刷新后接着同一段对话`, true);
+    // 改文件要确认：点“允许”才写
+    const file = `${label}-made.txt`;
+    await page.fill('#prompt', `写文件 ${file} 网页里写的`);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.ask .actions button');
+    check(`${label} 改文件前弹出确认框，写清要写哪个文件`, (await page.textContent('.ask')).includes(file));
+    await page.click('.ask .actions button:has-text("允许")');
+    await page.waitForFunction(() => document.querySelector('.ask .answered')?.textContent.includes('已允许') && [...document.querySelectorAll('.msg.agent')].some((n) => n.textContent.includes('工具成功')));
+    check(`${label} 点允许后文件真的写好了`, fs.readFileSync(path.join(dataDir, 'workspace', file), 'utf8') === '网页里写的');
+    await page.fill('#prompt', `写文件 ${label}-no.txt 不该写`);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelectorAll('.ask').length === 2 && document.querySelectorAll('.ask')[1].querySelector('.actions button'));
+    await page.locator('.ask').nth(1).locator('button', { hasText: '拒绝' }).click();
+    await page.waitForFunction(() => document.querySelectorAll('.ask')[1]?.querySelector('.answered')?.textContent.includes('已拒绝'));
+    await page.waitForSelector('#send:not([hidden])');
+    check(`${label} 点拒绝后文件没写`, !fs.existsSync(path.join(dataDir, 'workspace', `${label}-no.txt`)));
+    // 对话列表：手机上要先打开抽屉
+    const openSide = async () => {
+      if (label !== 'phone') return;
+      await page.click('#toggle-side');
+      await page.waitForFunction(() => Math.round(document.querySelector('#side').getBoundingClientRect().left) === 0);
+    };
+    await openSide();
+    await page.waitForSelector('#sessions li.active');
+    check(`${label} 对话列表里有当前对话并高亮`, await page.isVisible('#sessions li.active'));
+    await page.click('#sessions li.active button.mini[title="改名"]');
+    await page.fill('#sessions li input', `${label} 的测试对话`);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction((t) => document.querySelector('#sessions li.active .title')?.textContent === t, `${label} 的测试对话`);
+    check(`${label} 改名生效`, (await page.textContent('#chat-title')) === `${label} 的测试对话`);
+    await page.click('#new-chat');
+    check(`${label} 新对话清空了聊天区`, (await page.$$('#transcript > *')).length === 0);
+    await openSide();
+    await page.locator('#sessions li', { hasText: `${label} 的测试对话` }).locator('button.open').click();
+    await page.waitForFunction(() => [...document.querySelectorAll('.msg.agent')].some((n) => /还记得吗/.test(n.textContent)));
+    check(`${label} 从列表打开旧对话，历史回来了`, true);
+    await openSide();
+    const before = (await page.$$('#sessions li')).length;
+    await page.click('#sessions li.active button.mini[title="删除"]');
+    await page.click('#sessions li.active button.mini[title="删除"]');
+    await page.waitForFunction((n) => document.querySelectorAll('#sessions li').length === n - 1, before);
+    check(`${label} 点两次删除，对话从列表里没了，聊天区清空`, (await page.$$('#transcript > *')).length === 0);
+    if (label === 'phone') { await page.click('#scrim', { position: { x: 370, y: 400 } }); check('phone 点抽屉外面能关上抽屉', await page.isHidden('#scrim')); }
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
     check(`${label} 没有横向溢出`, !overflow);
     await page.screenshot({ path: path.join(out, `${label}.png`) });
     check(`${label} 没有页面脚本错误`, errors.length === 0);
+    await page.close();
+  }
+  // 确认框等着时刷新页面：回复接上，确认框还在，还能点
+  {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.goto(base);
+    await page.fill('#password', cfg.password);
+    await page.click('#login-form button');
+    await page.waitForSelector('#chat:not([hidden])');
+    await page.fill('#prompt', '写文件 after-reload.txt 刷新后写的');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.ask .actions button');
+    await page.screenshot({ path: path.join(out, 'ask-card.png') });
+    await page.reload();
+    await page.waitForSelector('.ask .actions button');
+    check('刷新后正在等的确认框还在', (await page.textContent('.ask')).includes('after-reload.txt') && await page.isVisible('#stop'));
+    await page.click('.ask .actions button:has-text("允许")');
+    await page.waitForSelector('#send:not([hidden])');
+    check('刷新后点允许，文件照样写好', fs.readFileSync(path.join(dataDir, 'workspace', 'after-reload.txt'), 'utf8') === '刷新后写的');
+    check('刷新后接上时提问只显示一次', (await page.$$eval('.msg.user', (ns) => ns.filter((n) => n.textContent.includes('after-reload.txt')).length)) === 1);
     await page.close();
   }
   check('全程没有往外连', proxy.attempts.length === 0);

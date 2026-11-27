@@ -90,3 +90,26 @@ test('任务：同一时间只跑一个；事件带序号，可从任意序号�
   await new Promise((r) => setImmediate(r));
   assert.equal(tasks.get(second.id).status, 'stopped');
 });
+
+test('确认框：没人回答到点按“超时”处理；乱填的回答不接受', async () => {
+  let decision;
+  const tasks = createTasks({ askTimeoutMs: 30, run: async ({ ask }) => { decision = await ask({ name: 'Write', input: {} }); } });
+  const { task } = tasks.start({ text: 'x' });
+  await new Promise((r) => setTimeout(r, 5));
+  const req = tasks.get(task.id).events.find((e) => e.type === 'permission');
+  assert.ok(req);
+  assert.equal(tasks.answer(task.id, req.requestId, 'yes-please'), false, '只接受 allow / always / deny');
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(decision, 'timeout');
+  assert.equal(tasks.answer(task.id, req.requestId, 'allow'), false, '超时后不能再答');
+});
+
+test('任务：发出“做完”事件后马上能发下一条，不用等 SDK 进程收尾', async () => {
+  let finishRun;
+  const tasks = createTasks({ run: ({ emit }) => new Promise((resolve) => { emit({ type: 'done', text: 'ok' }); finishRun = resolve; }) });
+  tasks.start({ text: 'a' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(tasks.running, null, '“做完”之后不再占着');
+  assert.ok(tasks.start({ text: 'b' }).task, '下一条能立刻开始');
+  finishRun();
+});

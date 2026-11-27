@@ -1,7 +1,7 @@
 /**
- * 最简网页：登录、发消息、边生成边显示、工具步骤、停止。
+ * 网页：登录、对话列表（改名、删除）、发消息边生成边显示、工具步骤、允许/拒绝确认框、停止。
  * 发消息时同一条连接直接收事件；断线或 45 秒没收到任何东西（服务器每 20 秒有心跳）就按最后的序号重连续接，
- * 不重复提交（未央 1.0.500 里修过的“连接半死一直转圈”在这里一开始就按对的做）。
+ * 不重复提交。刷新页面时如果有回复还在进行，会接上继续显示。
  */
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -13,13 +13,21 @@ const SESSION = 'weiyang-agent.session';
 const IDLE_MS = 45_000;
 const RETRY_MS = [1000, 2000, 4000, 8000, 8000];
 
-let current = null; // { id, last, ctrl, bubble }
+let current = null; // 正在进行的回复：{ id, last, ctrl, bubble }
+let sessionId = store.get(SESSION);
 
+/* ---------- 基础 ---------- */
 function show(view) {
   $('login').hidden = view !== 'login';
   $('chat').hidden = view !== 'chat';
 }
 function status(text) { $('status').textContent = text || ''; }
+function setSession(id, title) {
+  sessionId = id || null;
+  store.set(SESSION, sessionId);
+  if (title !== undefined) $('chat-title').textContent = title || '新对话';
+  for (const li of $('sessions').children) li.classList.toggle('active', li.dataset.id === sessionId);
+}
 
 async function api(path, { method = 'GET', body, headers = {}, signal } = {}) {
   const res = await fetch(path, {
@@ -27,30 +35,36 @@ async function api(path, { method = 'GET', body, headers = {}, signal } = {}) {
     headers: { ...(body && { 'Content-Type': 'application/json' }), Authorization: 'Bearer ' + (store.get(TOKEN) || ''), ...headers },
     body: body && JSON.stringify(body)
   });
-  if (res.status === 401 && path !== '/api/login') { store.set(TOKEN, null); show('login'); throw new Error('登录已失效'); }
+  if (res.status === 401) { store.set(TOKEN, null); show('login'); throw new Error('登录已失效'); }
   return res;
 }
 
-function add(cls, text = '') {
+function add(cls, text = '', before = null) {
   const el = document.createElement('div');
   el.className = cls;
   el.textContent = text;
-  $('transcript').append(el);
+  $('transcript').insertBefore(el, before);
   el.scrollIntoView({ block: 'end' });
   return el;
 }
 
-function addTool(ev) {
+/* ---------- 工具卡与确认框 ---------- */
+function toolCard(t, before = null) {
   const box = document.createElement('details');
-  box.className = 'tool';
-  box.dataset.id = ev.id;
+  box.className = 'tool' + (t.ok === false ? ' failed' : '');
+  box.dataset.id = t.id;
   const s = document.createElement('summary');
-  s.textContent = `🔧 ${ev.name}`;
+  s.textContent = `🔧 ${t.name}`;
   const pre = document.createElement('pre');
-  pre.textContent = JSON.stringify(ev.input ?? {}, null, 2);
+  pre.textContent = JSON.stringify(t.input ?? {}, null, 2);
   box.append(s, pre);
-  // 工具卡放在当前回复气泡前面，回复文字继续在后面长
-  $('transcript').insertBefore(box, current?.bubble ?? null);
+  if (t.summary != null) {
+    const r = document.createElement('pre');
+    r.textContent = (t.ok === false ? '失败：' : '结果：') + t.summary;
+    box.append(r);
+  }
+  $('transcript').insertBefore(box, before);
+  return box;
 }
 
 function toolResult(ev) {
@@ -62,20 +76,70 @@ function toolResult(ev) {
   box.append(pre);
 }
 
+/** 把工具调用说成人话：要做什么、对什么做 */
+function describe(name, input = {}) {
+  if (name === 'Write') return { what: '新建或覆盖文件', detail: `${input.file_path}\n\n${String(input.content ?? '').slice(0, 1500)}` };
+  if (name === 'Edit') return { what: '修改文件', detail: `${input.file_path}\n\n把：${String(input.old_string ?? '').slice(0, 600)}\n改成：${String(input.new_string ?? '').slice(0, 600)}` };
+  if (name === 'Bash') return { what: '运行命令（隔离环境，不能联网）', detail: `${input.description ? input.description + '\n' : ''}$ ${input.command}` };
+  return { what: `使用工具 ${name}`, detail: JSON.stringify(input, null, 2) };
+}
+const DECISION_TEXT = { allow: '已允许', always: '已允许（本次对话都允许）', deny: '已拒绝', timeout: '太久没回答，已按拒绝处理' };
+
+function askCard(ev) {
+  const { what, detail } = describe(ev.name, ev.input);
+  const box = document.createElement('div');
+  box.className = 'ask';
+  box.dataset.request = ev.requestId;
+  const head = document.createElement('div');
+  head.className = 'what';
+  head.textContent = `未央想${what}，可以吗？`;
+  const pre = document.createElement('pre');
+  pre.textContent = detail;
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+  for (const [decision, label, cls] of [['allow', '允许', ''], ['always', '本次对话都允许', 'ghost'], ['deny', '拒绝', 'danger']]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    if (cls) b.className = cls;
+    b.addEventListener('click', async () => {
+      for (const x of actions.querySelectorAll('button')) x.disabled = true;
+      const res = await api(`/api/tasks/${current?.id}/permission`, { method: 'POST', body: { requestId: ev.requestId, decision } }).catch(() => null);
+      if (!res?.ok) { for (const x of actions.querySelectorAll('button')) x.disabled = false; status('没有提交成功，再点一次'); }
+    });
+    actions.append(b);
+  }
+  box.append(head, pre, actions);
+  $('transcript').insertBefore(box, current?.bubble ?? null);
+  box.scrollIntoView({ block: 'end' });
+}
+
+function answered(ev) {
+  const box = $('transcript').querySelector(`.ask[data-request="${CSS.escape(ev.requestId)}"]`);
+  if (!box) return;
+  const done = document.createElement('div');
+  done.className = 'answered';
+  done.textContent = DECISION_TEXT[ev.decision] || ev.decision;
+  box.querySelector('.actions')?.replaceWith(done);
+}
+
+/* ---------- 事件流 ---------- */
 function handle(ev) {
   if (Number.isFinite(ev.seq)) {
-    if (ev.seq <= current.last) return; // 续接时服务器会补发，已经收过的跳过
+    if (ev.seq <= current.last) return null; // 续接时服务器会补发，已经收过的跳过
     current.last = ev.seq;
   }
   switch (ev.type) {
     case 'task_created': current.id = ev.id; break;
-    case 'session': store.set(SESSION, ev.sessionId); break;
+    case 'session': if (ev.sessionId !== sessionId) { setSession(ev.sessionId); refreshList(); } break;
     case 'text': current.bubble.textContent += ev.delta; current.bubble.scrollIntoView({ block: 'end' }); break;
-    case 'tool': addTool(ev); break;
+    case 'tool': toolCard(ev, current.bubble); break;
     case 'tool_result': toolResult(ev); break;
+    case 'permission': askCard(ev); break;
+    case 'permission_answered': answered(ev); break;
     case 'notice': status(ev.text); break;
     case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; return 'end';
-    case 'stopped': current.bubble.textContent += '\n（已停止）'; return 'end';
+    case 'stopped': current.bubble.textContent += (current.bubble.textContent ? '\n' : '') + '（已停止）'; return 'end';
     case 'error': add('msg agent error', ev.error); return 'end';
   }
   return null;
@@ -110,37 +174,58 @@ async function readStream(res, ctrl) {
   }
 }
 
-async function send(text) {
-  add('msg user', text);
+/** 断了就按最后序号续接，直到任务结束或连续失败 */
+async function follow(outcome) {
+  let failures = 0;
+  while (outcome === 'drop' && current.id && failures < RETRY_MS.length) {
+    status('连接断了，正在接着收…');
+    await new Promise((r) => setTimeout(r, RETRY_MS[failures]));
+    try {
+      const again = await api(`/api/tasks/${current.id}/events?after=${current.last}`, { headers: { Accept: 'text/event-stream' } });
+      if (again.status === 404) { add('msg agent error', '服务器上找不到这个任务了（可能重启过）'); return; }
+      failures = again.ok ? 0 : failures + 1;
+      if (again.ok) { status(''); outcome = await readStream(again, current.ctrl); }
+    } catch { failures++; }
+  }
+  if (outcome === 'drop') add('msg agent error', '一直连不上服务器。服务器可能还在做，稍后刷新再看，不要重复发送。');
+}
+
+async function run(start) {
   const bubble = add('msg agent streaming');
   const ctrl = new AbortController();
   current = { id: null, last: 0, ctrl, bubble };
   busy(true);
   try {
-    const res = await api('/api/tasks', { method: 'POST', body: { text, sessionId: store.get(SESSION) }, headers: { Accept: 'text/event-stream' }, signal: ctrl.signal });
-    if (!res.ok) { add('msg agent error', (await res.json().catch(() => ({}))).error || `服务器返回 ${res.status}`); return; }
-    let outcome = await readStream(res, ctrl);
-    let failures = 0;
-    while (outcome === 'drop' && current.id && failures < RETRY_MS.length) {
-      status('连接断了，正在接着收…');
-      await new Promise((r) => setTimeout(r, RETRY_MS[failures]));
-      try {
-        const again = await api(`/api/tasks/${current.id}/events?after=${current.last}`, { headers: { Accept: 'text/event-stream' } });
-        if (again.status === 404) { add('msg agent error', '服务器上找不到这个任务了（可能重启过）'); return; }
-        failures = again.ok ? 0 : failures + 1;
-        if (again.ok) { status(''); outcome = await readStream(again, ctrl); }
-      } catch { failures++; }
-    }
-    if (outcome === 'drop') add('msg agent error', '一直连不上服务器。服务器可能还在做，稍后刷新再看，不要重复发送。');
+    await start();
   } catch (e) {
     if (!ctrl.signal.aborted) add('msg agent error', '发送失败：' + (e.message || e));
   } finally {
     bubble.classList.remove('streaming');
     if (!bubble.textContent) bubble.remove();
+    for (const b of $('transcript').querySelectorAll('.ask .actions button')) b.disabled = true;
     status('');
     busy(false);
     current = null;
+    refreshList();
   }
+}
+
+function send(text) {
+  add('msg user', text);
+  return run(async () => {
+    const res = await api('/api/tasks', { method: 'POST', body: { text, sessionId }, headers: { Accept: 'text/event-stream' }, signal: current.ctrl.signal });
+    if (!res.ok) { add('msg agent error', (await res.json().catch(() => ({}))).error || `服务器返回 ${res.status}`); return; }
+    await follow(await readStream(res, current.ctrl));
+  });
+}
+
+/** 刷新页面时有回复还在进行：从头重放这一轮并接着收 */
+function reattach(task) {
+  add('msg user', task.text);
+  return run(async () => {
+    current.id = task.id;
+    await follow('drop');
+  });
 }
 
 function busy(on) {
@@ -149,6 +234,94 @@ function busy(on) {
   $('prompt').disabled = on;
 }
 
+/* ---------- 对话列表 ---------- */
+const when = (ms) => new Date(ms).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+async function refreshList() {
+  let rows = [];
+  try { const res = await api('/api/sessions'); if (res.ok) rows = await res.json(); } catch { return; }
+  const ul = $('sessions');
+  ul.replaceChildren(...rows.map(row));
+  $('sessions-empty').hidden = rows.length > 0;
+  const mine = rows.find((r) => r.id === sessionId);
+  if (mine) $('chat-title').textContent = mine.title;
+}
+
+function row(s) {
+  const li = document.createElement('li');
+  li.dataset.id = s.id;
+  li.classList.toggle('active', s.id === sessionId);
+  const open = document.createElement('button');
+  open.type = 'button';
+  open.className = 'open';
+  const t = document.createElement('span'); t.className = 'title'; t.textContent = s.title;
+  const w = document.createElement('span'); w.className = 'when'; w.textContent = when(s.updatedAt);
+  open.append(t, w);
+  open.addEventListener('click', () => { if (!current) openSession(s.id, s.title); closeSide(); });
+  const ren = document.createElement('button');
+  ren.type = 'button'; ren.className = 'mini'; ren.textContent = '✎'; ren.title = '改名'; ren.setAttribute('aria-label', '改名');
+  ren.addEventListener('click', () => renameInline(li, s));
+  const del = document.createElement('button');
+  del.type = 'button'; del.className = 'mini'; del.textContent = '🗑'; del.title = '删除'; del.setAttribute('aria-label', '删除');
+  del.addEventListener('click', async () => {
+    if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = '确认删除？'; setTimeout(() => { del.dataset.armed = ''; del.textContent = '🗑'; }, 3000); return; }
+    const res = await api(`/api/sessions/${s.id}`, { method: 'DELETE' }).catch(() => null);
+    if (!res?.ok) { status((await res?.json().catch(() => ({})))?.error || '删除失败'); return; }
+    if (s.id === sessionId) newChat();
+    refreshList();
+  });
+  li.append(open, ren, del);
+  return li;
+}
+
+function renameInline(li, s) {
+  const input = document.createElement('input');
+  input.value = s.title;
+  input.setAttribute('aria-label', '新名字');
+  input.style.cssText = 'flex:1;min-width:0;font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)';
+  li.replaceChildren(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const save = async (ok) => {
+    if (done) return;
+    done = true;
+    if (ok && input.value.trim() && input.value.trim() !== s.title) await api(`/api/sessions/${s.id}/rename`, { method: 'POST', body: { title: input.value.trim() } }).catch(() => {});
+    refreshList();
+  };
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) save(true); if (e.key === 'Escape') save(false); });
+  input.addEventListener('blur', () => save(true));
+}
+
+async function openSession(id, title) {
+  const res = await api(`/api/sessions/${id}`).catch(() => null);
+  if (!res?.ok) { status('打不开这段对话'); return false; }
+  const s = await res.json();
+  renderHistory(s.items);
+  setSession(id, title ?? s.title);
+  return s;
+}
+
+function renderHistory(items) {
+  $('transcript').replaceChildren();
+  for (const it of items) {
+    if (it.role === 'user') add('msg user', it.text);
+    else if (it.role === 'agent') add('msg agent', it.text);
+    else if (it.role === 'tool') toolCard(it);
+  }
+}
+
+function newChat() {
+  if (current) return;
+  setSession(null, '新对话');
+  $('transcript').replaceChildren();
+}
+
+/* ---------- 侧栏（手机上是抽屉） ---------- */
+function openSide() { $('side').classList.add('open'); $('scrim').hidden = false; $('toggle-side').setAttribute('aria-expanded', 'true'); }
+function closeSide() { $('side').classList.remove('open'); $('scrim').hidden = true; $('toggle-side').setAttribute('aria-expanded', 'false'); }
+
+/* ---------- 绑定 ---------- */
 $('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('login-error').textContent = '';
@@ -159,7 +332,6 @@ $('login-form').addEventListener('submit', async (e) => {
   $('password').value = '';
   enter();
 });
-
 $('composer').addEventListener('submit', (e) => {
   e.preventDefault();
   const text = $('prompt').value.trim();
@@ -171,15 +343,29 @@ $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
 });
 $('stop').addEventListener('click', () => { if (current?.id) api(`/api/tasks/${current.id}/stop`, { method: 'POST' }).catch(() => {}); });
-$('new-chat').addEventListener('click', () => { if (current) return; store.set(SESSION, null); $('transcript').replaceChildren(); status('已开始新对话'); });
+$('new-chat').addEventListener('click', () => { newChat(); closeSide(); });
+$('toggle-side').addEventListener('click', () => ($('side').classList.contains('open') ? closeSide() : openSide()));
+$('scrim').addEventListener('click', closeSide);
 $('logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); store.set(TOKEN, null); show('login'); });
 
 async function enter() {
   show('chat');
-  try {
-    const res = await api('/api/status');
-    if (res.ok) status('模型：' + (await res.json()).model);
-  } catch { /* 401 已切回登录 */ }
+  let st = null;
+  try { const res = await api('/api/status'); if (res.ok) st = await res.json(); } catch { return; }
+  await refreshList();
+  const running = st?.running;
+  const target = running?.sessionId || sessionId;
+  if (target) {
+    const s = await openSession(target);
+    if (!s) setSession(null, '新对话');
+    // 正在进行的这一轮可能已经部分写进记录：从最后一条相同的提问处截掉，交给重放来显示
+    if (s && running) {
+      const nodes = [...$('transcript').children];
+      const idx = nodes.findLastIndex((n) => n.classList.contains('user') && n.textContent === running.text);
+      if (idx >= 0) for (const n of nodes.slice(idx)) n.remove();
+    }
+  }
+  if (running) reattach(running);
 }
 
 if (store.get(TOKEN)) enter(); else show('login');
