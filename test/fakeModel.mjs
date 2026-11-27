@@ -40,6 +40,10 @@ export function startFakeModel() {
       return res.end('{"type":"error","error":{"type":"not_found_error","message":"not here"}}');
     }
     const last = lastUserText(j.messages || []);
+    if (/模型出错/.test(last.text || '')) {
+      res.writeHead(500, { 'content-type': 'application/json' });
+      return res.end('{"type":"error","error":{"type":"api_error","message":"fake upstream failure"}}');
+    }
     let blocks;
     if (last.toolResult) {
       blocks = [{ type: 'text', text: `工具${last.toolResult.is_error ? '失败' : '成功'}：${flat(last.toolResult.content).slice(0, 200)}` }];

@@ -26,7 +26,17 @@ const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token
 const status = await (await fetch(base + '/api/status', { headers: H })).json();
 console.log(`  模型 ${status.model}，运行命令${status.commands ? '已开放' : '未开放'}`);
 
+const ASK_LIMIT_MS = 120_000;
 async function ask(text, sessionId) {
+  // 两分钟没做完就停下并说明，不无限等
+  const timer = setTimeout(async () => {
+    console.error(`✗ 两分钟还没回复完（最后的提示：${lastNotice || '无'}）。看日志：journalctl -u weiyang-agent -n 30 --no-pager`);
+    process.exit(1);
+  }, ASK_LIMIT_MS);
+  try { return await askOnce(text, sessionId); } finally { clearTimeout(timer); }
+}
+let lastNotice = '';
+async function askOnce(text, sessionId) {
   const res = await fetch(base + '/api/tasks', { method: 'POST', headers: { ...H, Accept: 'text/event-stream' }, body: JSON.stringify({ text, sessionId }) });
   assert.equal(res.status, 200, `发消息失败 ${res.status}`);
   const reader = res.body.getReader();
@@ -45,6 +55,7 @@ async function ask(text, sessionId) {
       const ev = JSON.parse(data);
       evs.push(ev);
       if (ev.type === 'task_created') taskId = ev.id;
+      if (ev.type === 'notice') { lastNotice = ev.text; console.log('  …' + ev.text); }
       if (ev.type === 'permission') await fetch(`${base}/api/tasks/${taskId}/permission`, { method: 'POST', headers: H, body: JSON.stringify({ requestId: ev.requestId, decision: 'allow' }) });
     }
   }

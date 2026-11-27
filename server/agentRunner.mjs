@@ -191,6 +191,13 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         announced = true;
         emit({ type: 'session', sessionId: current });
       }
+      if (m.type === 'system' && m.subtype === 'api_retry') {
+        // 模型接口出错时 SDK 会悄悄退避重试，不说出来就像卡死了：写进日志，也告诉网页
+        const why = m.error_status ? `状态码 ${m.error_status}` : m.no_response ? `${Math.round(m.no_response.waited_ms / 1000)} 秒没回应` : String(m.error || '连不上');
+        console.warn(`[模型重试] 第 ${m.attempt}/${m.max_retries} 次，${why}（${m.error || ''}），${Math.round((m.retry_delay_ms || 0) / 1000)} 秒后再试`);
+        emit({ type: 'notice', text: `模型那边出错（${why}），正在第 ${m.attempt} 次重试…` });
+        continue;
+      }
       if (m.type === 'stream_event') {
         const ev = m.event;
         if (ev?.type === 'message_start') streamedThisMessage = false;

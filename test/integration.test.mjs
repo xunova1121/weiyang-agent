@@ -131,6 +131,28 @@ test('健康检查不用登录，也不透露型号、地址等配置', async ()
   assert.doesNotMatch(text, /deepseek|127\.0\.0\.1|fake-key/);
 });
 
+test('模型接口出错时不会悄悄卡住：网页收到“正在重试”的提示，点停止能停下', async () => {
+  const r = await post('/api/tasks', { text: '模型出错测试' });
+  const { id } = await r.json();
+  const res = await fetch(`${base}/api/tasks/${id}/events?after=0`, { headers: { Authorization: 'Bearer ' + token } });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  let notice = null;
+  const deadline = Date.now() + 60_000;
+  while (!notice && Date.now() < deadline) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const m = buf.match(/"type":"notice","text":"([^"]+)"/);
+    if (m) notice = m[1];
+  }
+  assert.match(notice || '', /模型那边出错（状态码 500）.*重试/);
+  await post(`/api/tasks/${id}/stop`, {});
+  for (;;) { const { done, value } = await reader.read(); if (done) break; buf += dec.decode(value); }
+  assert.match(buf, /"type":"stopped"/);
+});
+
 test('全程没有往外连（关掉了统计、上报、自动更新）', () => {
   assert.deepEqual(proxy.attempts, [], '外连尝试：' + proxy.attempts.join(', '));
 });
