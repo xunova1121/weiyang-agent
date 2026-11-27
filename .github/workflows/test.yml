@@ -24,3 +24,17 @@ jobs:
         run: echo "REQUIRE_SANDBOX=1" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm test
+
+  # 测试全过后，把这个版本放进 stable 分支；服务器上的自动更新只拉 stable（见 deploy/update.sh）
+  promote:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 推到 stable
+        run: git push origin HEAD:refs/heads/stable

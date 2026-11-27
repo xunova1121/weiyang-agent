@@ -8,6 +8,7 @@ import { createAuth } from '../server/auth.mjs';
 import { checkToolPaths, insideWorkspace } from '../server/pathGuard.mjs';
 import { agentEnv, blockedHint, QUIET_ENV, sandboxStatus } from '../server/agentRunner.mjs';
 import { createTasks } from '../server/tasks.mjs';
+import { busyMarker } from '../server/busy.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'wa-'));
 
@@ -127,4 +128,24 @@ test('沙箱起不来时按环境给出办法：Ubuntu 的 AppArmor 限制、Doc
   assert.match(blockedHint({ readFile: () => '1\n', exists: () => false }), /apparmor-bwrap/);
   assert.match(blockedHint({ readFile: () => { throw new Error('none'); }, exists: (p) => p === '/.dockerenv' }), /systempaths=unconfined/);
   assert.match(blockedHint({ readFile: () => '0', exists: () => false }), /README/);
+});
+
+test('“忙”标记：有回复在做时数据目录里有 .busy，做完（含停止）就删掉；启动时清掉残留', async () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, '.busy'), 'old');
+  const mark = busyMarker(dir);
+  assert.equal(fs.existsSync(path.join(dir, '.busy')), false, '启动清掉残留');
+  let release;
+  const tasks = createTasks({ onBusy: mark, run: ({ emit }) => new Promise((r) => { release = () => { emit({ type: 'done', text: 'x' }); r(); }; }) });
+  tasks.start({ text: 'a' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(fs.existsSync(path.join(dir, '.busy')), true, '在做时有标记');
+  release();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(fs.existsSync(path.join(dir, '.busy')), false, '做完删掉');
+  const t2 = tasks.start({ text: 'b' }).task;
+  await new Promise((r) => setImmediate(r));
+  tasks.stop(t2.id); release();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(fs.existsSync(path.join(dir, '.busy')), false);
 });

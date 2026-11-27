@@ -9,7 +9,9 @@
 #   5. 第一次装时问登录密码和 DeepSeek 密钥（输入时不显示），写进 /etc/weiyang-agent.env（只有 root 能读）
 #   6. 注册成系统服务 weiyang-agent，只在本机 127.0.0.1:8797 监听，开机自启、崩了自动重启
 # 和原来的未央（/opt/jarvis、端口 8787、账号 jarvis）互不影响，这个脚本一样也不碰。
-# 可选环境变量：PORT（默认 8797）、NPM_REGISTRY（默认 npmmirror）、SKIP_PACKAGES=1（不装系统软件）
+#   7. 用 git 装的话，再装自动更新：每 30 分钟检查一次 stable 分支（自动测试全过的版本），见 deploy/update.sh
+# 可选环境变量：PORT（默认 8797）、NPM_REGISTRY（默认 npmmirror）、SKIP_PACKAGES=1（不装系统软件）、
+#   SKIP_NPM=1（不重装依赖，自动更新时用）、NO_AUTO_UPDATE=1（不装自动更新）
 set -euo pipefail
 
 APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,6 +37,8 @@ NPM="$(dirname "$NODE")/npm"
 [ -x "$NPM" ] || NPM="$(command -v npm || true)"
 [ -n "$NPM" ] || die "没找到 npm"
 say "Node.js $("$NODE" -v)：$NODE"
+# 记下 node 所在目录：自动更新由系统定时器运行，那时 PATH 里找不到 nvm 装的 node 和 npm
+dirname "$NODE" > /etc/weiyang-agent.node-dir
 
 # 2. 沙箱工具
 if [ "${SKIP_PACKAGES:-}" != 1 ]; then
@@ -78,11 +82,13 @@ if ! su -s /bin/sh weiyang -c "\"$NODE\" -v" >/dev/null 2>&1; then
 fi
 
 # 4. 依赖
-say "安装依赖（$REG，一般 1～3 分钟）"
 cd "$APP"
-"$NPM" ci --omit=dev --ignore-scripts --no-audit --no-fund --registry="$REG"
-# glibc 系统用不到 musl 版程序，删掉省 300 多 MB
-if ldd --version 2>&1 | grep -qi 'glibc\|gnu libc'; then rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl; fi
+if [ "${SKIP_NPM:-}" != 1 ] || [ ! -d node_modules ]; then
+  say "安装依赖（$REG，一般 1～3 分钟）"
+  "$NPM" ci --omit=dev --ignore-scripts --no-audit --no-fund --registry="$REG"
+  # glibc 系统用不到 musl 版程序，删掉省 300 多 MB
+  if ldd --version 2>&1 | grep -qi 'glibc\|gnu libc'; then rm -rf node_modules/@anthropic-ai/claude-agent-sdk-*-musl; fi
+fi
 
 # 5. 配置（已有就不动，升级时不会改你的密码和密钥）
 if [ ! -f "$ENVF" ]; then
@@ -114,14 +120,44 @@ sed -e "s|^ExecStart=.*|ExecStart=$RUN_NODE server/main.mjs|" \
     -e "s|^WorkingDirectory=.*|WorkingDirectory=$APP|" \
     -e "s|PORT=8797|PORT=$PORT|" \
     "$APP/deploy/weiyang-agent.service" > "$UNIT"
+# 7. 自动更新（每 30 分钟）
+if [ -d "$APP/.git" ] && [ "${NO_AUTO_UPDATE:-}" != 1 ]; then
+  cat > /etc/systemd/system/weiyang-agent-update.service <<UNIT
+[Unit]
+Description=未央 Agent 版自动更新
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash $APP/deploy/update.sh
+UNIT
+  cat > /etc/systemd/system/weiyang-agent-update.timer <<UNIT
+[Unit]
+Description=每 30 分钟检查一次未央 Agent 版更新
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  AUTO_UPDATE=1
+fi
 systemctl daemon-reload
 systemctl enable weiyang-agent >/dev/null 2>&1
+[ "${AUTO_UPDATE:-}" = 1 ] && systemctl enable --now weiyang-agent-update.timer >/dev/null 2>&1
 systemctl restart weiyang-agent
 
 say "等服务起来"
 for _ in $(seq 1 30); do
   if curl -fsS "http://127.0.0.1:$PORT/api/health" 2>/dev/null | grep -q '"ok":true'; then
     say "好了：未央 Agent 版已在运行（本机 127.0.0.1:$PORT）"
+    if [ "${AUTO_UPDATE:-}" = 1 ]; then say "自动更新已开：每 30 分钟检查一次（看记录：journalctl -u weiyang-agent-update -n 20 --no-pager）"
+    elif [ ! -d "$APP/.git" ]; then say "这份程序不是用 git 装的，不能自动更新"; fi
     journalctl -u weiyang-agent -n 5 --no-pager 2>/dev/null | grep -E '已启动|沙箱|跑命令' || true
     echo "下一步：在宝塔里给你的域名加反向代理，目标 http://127.0.0.1:$PORT（见 deploy/宝塔安装说明.md）"
     exit 0

@@ -12,9 +12,15 @@ const KEEP_FINISHED = 20; // 做完的任务只留最近 20 个的事件
 export const ASK_TIMEOUT_MS = 15 * 60_000;
 const DECISIONS = ['allow', 'always', 'deny'];
 
-export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS }) {
+export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS, onBusy = () => {} }) {
   const tasks = new Map();
-  let running = null;
+  // 正在跑的任务；变化时告诉 onBusy（服务器据此写“忙”标记，自动更新看到忙就先不重启）
+  let current = null;
+  const setRunning = (id) => {
+    if (id === current) return;
+    current = id;
+    try { onBusy(Boolean(id)); } catch { /* 标记写不了不影响任务 */ }
+  };
 
   function publish(task, ev) {
     const row = { seq: task.events.length + 1, at: Date.now(), ...ev };
@@ -23,7 +29,7 @@ export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS }) {
     if (['done', 'error', 'stopped'].includes(ev.type)) {
       task.status = ev.type;
       // 结果一发出就算做完：SDK 进程收尾还要一会儿，不能让用户紧接着发的下一条撞上“上一条还在做”
-      if (running === task.id) running = null;
+      if (current === task.id) setRunning(null);
     }
     for (const fn of task.listeners) fn(row);
   }
@@ -34,9 +40,9 @@ export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS }) {
   }
 
   return {
-    get running() { return running; },
+    get running() { return current; },
     start({ text, sessionId = null }) {
-      if (running) return { error: '上一条还在做，等它做完或先点停止', status: 409 };
+      if (current) return { error: '上一条还在做，等它做完或先点停止', status: 409 };
       const task = { id: crypto.randomUUID(), status: 'running', sessionId, text, events: [], listeners: new Set(), ctrl: new AbortController(), startedAt: Date.now(), pending: new Map() };
       const ask = ({ name, input, signal }) => new Promise((resolve) => {
         if (task.ctrl.signal.aborted || signal?.aborted) return resolve('deny');
@@ -56,14 +62,14 @@ export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS }) {
         publish(task, { type: 'permission', requestId, name, input });
       });
       tasks.set(task.id, task);
-      running = task.id;
+      setRunning(task.id);
       publish(task, { type: 'started' });
       Promise.resolve()
         .then(() => run({ text, sessionId, signal: task.ctrl.signal, ask, emit: (ev) => publish(task, ev) }))
         .catch((e) => publish(task, { type: 'error', error: String(e?.message || e) }))
         .finally(() => {
           if (task.status === 'running') publish(task, { type: 'error', error: '任务意外结束' });
-          if (running === task.id) running = null;
+          if (current === task.id) setRunning(null);
           for (const fn of task.listeners) fn(null); // 通知订阅者：结束了
           task.listeners.clear();
           prune();

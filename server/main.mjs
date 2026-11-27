@@ -6,6 +6,7 @@ import { createHttpServer } from './http.mjs';
 import { blockedHint, runAgent, sandboxStatus } from './agentRunner.mjs';
 import { createSessions, useConfigDir, workspaceDir } from './sessions.mjs';
 import { createFiles } from './files.mjs';
+import { busyMarker } from './busy.mjs';
 
 let cfg;
 try { cfg = loadConfig(); }
@@ -18,6 +19,6 @@ if (sandbox === 'blocked') console.warn(blockedHint());
 useConfigDir(cfg);
 
 const auth = createAuth({ password: cfg.password, dataDir: cfg.dataDir });
-const tasks = createTasks({ run: (o) => runAgent(cfg, o) });
+const tasks = createTasks({ run: (o) => runAgent(cfg, o), onBusy: busyMarker(cfg.dataDir) });
 const server = createHttpServer({ auth, tasks, cfg, sessions: createSessions(cfg), files: createFiles(workspaceDir(cfg)) });
 server.listen(cfg.port, cfg.host, () => console.log(`未央 Agent 版已启动：http://${cfg.host}:${cfg.port}（模型 ${cfg.model}，接口 ${cfg.baseUrl}，跑命令${cfg.commands ? '已开放（沙箱内，每次需确认）' : '未开放'}）`));
