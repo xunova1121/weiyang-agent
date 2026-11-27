@@ -14,7 +14,7 @@ set -uo pipefail
 if [ -z "${WEIYANG_UPDATE_COPY:-}" ]; then
   COPY="$(mktemp /tmp/weiyang-update.XXXXXX.sh)"
   cp "${BASH_SOURCE[0]}" "$COPY"
-  APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" WEIYANG_UPDATE_COPY="$COPY" exec bash "$COPY" "$@"
+  APP_DIR="${APP_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}" WEIYANG_UPDATE_COPY="$COPY" exec bash "$COPY" "$@"
 fi
 trap 'rm -f "$WEIYANG_UPDATE_COPY"' EXIT
 
@@ -43,6 +43,9 @@ done
 OLD="$(git rev-parse HEAD)"
 NEW="$(git rev-parse FETCH_HEAD)"
 [ "$OLD" = "$NEW" ] && { say "已是最新（${OLD:0:7}）"; exit 0; }
+# 上次装了起不来、已经退回的版本：不再反复试（否则每 30 分钟重启一次），等出了更新的版本再装
+FAILED_MARK="$DATA/.update-failed"
+if [ "$(cat "$FAILED_MARK" 2>/dev/null)" = "$NEW" ]; then say "${NEW:0:7} 上次装了起不来，已跳过，等下一个版本"; exit 0; fi
 
 if [ -f "$DATA/.busy" ]; then
   started="$(cat "$DATA/.busy" 2>/dev/null || echo 0)"
@@ -70,11 +73,18 @@ if ! git diff --quiet "$OLD" "$NEW" -- package.json package-lock.json; then
   if ldd --version 2>&1 | grep -qi 'glibc\|gnu libc'; then rm -rf "$STAGED"/node_modules/@anthropic-ai/claude-agent-sdk-*-musl; fi
 fi
 
+# 跑安装脚本（重新生成服务并重启、做健康检查）；输出写进更新记录（journalctl -u weiyang-agent-update），出错能查
+run_install() {
+  SKIP_PACKAGES=1 SKIP_NPM=1 bash "$APP/deploy/install.sh" 2>&1 | sed 's/^/[未央更新]   /'
+  return "${PIPESTATUS[0]}"
+}
+
 rollback() {
   say "新版本起不来，退回 ${OLD:0:7}"
+  echo "$NEW" > "$FAILED_MARK"
   git reset -q --hard "$OLD"
   if [ -n "$STAGED" ] && [ -d "$APP/node_modules.prev" ]; then rm -rf "$APP/node_modules" && mv "$APP/node_modules.prev" "$APP/node_modules"; fi
-  SKIP_PACKAGES=1 SKIP_NPM=1 bash "$APP/deploy/install.sh" >/dev/null 2>&1 && say "已退回，服务正常" || say "退回后也没起来，请看 journalctl -u weiyang-agent"
+  if run_install; then say "已退回，服务正常"; else say "退回后也没起来，请看 journalctl -u weiyang-agent"; fi
   exit 1
 }
 
@@ -87,8 +97,9 @@ if [ -n "$STAGED" ]; then
 fi
 
 # 用新版本的安装脚本重新生成服务并重启（不装系统软件、不重装依赖、不改配置），它会做健康检查
-if SKIP_PACKAGES=1 SKIP_NPM=1 bash "$APP/deploy/install.sh" >/dev/null 2>&1; then
+if run_install; then
   rm -rf "$APP/node_modules.prev"
+  rm -f "$FAILED_MARK"
   say "已更新到 ${NEW:0:7}"
   exit 0
 fi

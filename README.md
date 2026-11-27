@@ -15,6 +15,8 @@ cd /opt && git clone https://github.com/xunova1121/weiyang-agent.git
 bash /opt/weiyang-agent/deploy/install.sh     # 会问登录密码和 DeepSeek 密钥（不显示），装成系统服务，只开在本机 8797
 ```
 
+装好后自动更新：每 30 分钟检查一次 `stable` 分支（GitHub 上测试全过的版本才会进去），忙时不重启，起不来自动退回（`deploy/update.sh`）。
+
 ## 部署方式一：Docker
 
 ```bash

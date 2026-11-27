@@ -154,7 +154,7 @@ systemctl restart weiyang-agent
 
 say "等服务起来"
 for _ in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:$PORT/api/health" 2>/dev/null | grep -q '"ok":true'; then
+  if curl --noproxy "*" -fsS "http://127.0.0.1:$PORT/api/health" 2>/dev/null | grep -q '"ok":true'; then
     say "好了：未央 Agent 版已在运行（本机 127.0.0.1:$PORT）"
     if [ "${AUTO_UPDATE:-}" = 1 ]; then say "自动更新已开：每 30 分钟检查一次（看记录：journalctl -u weiyang-agent-update -n 20 --no-pager）"
     elif [ ! -d "$APP/.git" ]; then say "这份程序不是用 git 装的，不能自动更新"; fi
