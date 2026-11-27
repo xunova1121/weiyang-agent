@@ -110,6 +110,15 @@ npm start            # 默认 http://0.0.0.0:8797
 - 服务商的报错不直接给模型（里面可能带密钥），只说“密钥不对”“额度用完”这类人话。
 - 真实千帆、DeepSeek 联网还**没在这里测过**（测试用的是按原未央格式做的假服务）。
 
+## 识图、看文件、语音
+
+都用服务器配置里的 DeepSeek 密钥调 DeepSeek 官方接口（请求格式照搬原未央），密钥不下发给浏览器。
+- **📎 上传**（输入框左边，也可以直接粘贴图片）：文件传到工作文件夹的“上传”里，输入框里自动写上路径。
+- **识图**：`read_image` 识别图片、PDF 上的文字（表格、多栏可保留版式）；`ask_file` 就图片、PDF、Word、PPT、Excel 回答问题（文件先传给 DeepSeek，用完马上删，删不掉一小时后也会过期）。只读工作文件夹里的文件，最多 32MB。
+- **🎤 语音输入**：点一下开始说，再点一下结束，识别出的文字填进输入框，你看过再发。最长约两分钟。浏览器只在 **https** 下才给用麦克风。
+- **🔊 朗读**：每条回复下面有“朗读”，再点一次停。
+- 真实 DeepSeek 的识图、语音还**没在这里测过**（测试用的是按原未央格式做的假服务，浏览器测试用了 Chromium 自带的假麦克风）。
+
 ## 长期记忆
 
 - 你说“记住……”（或说了以后用得上的称呼、偏好），未央会用 `remember` 工具记下来，**每次先弹确认框**；`forget` 删一条也先问。
@@ -141,7 +150,7 @@ node test/server.smoke.mjs https://your.domain.com 你的密码   # 装好以后
 
 ## 目录
 
-- `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`memory.mjs` 长期记忆；`tools/` 给智能体的自定义工具（时间、联网搜索、记忆）；`http.mjs` 接口
+- `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`memory.mjs` 长期记忆；`deepseekMedia.mjs` 识图和语音；`tools/` 给智能体的自定义工具（时间、联网搜索、记忆）；`http.mjs` 接口
 - `deploy/install.sh`：一条命令安装/升级（宝塔等）；`deploy/宝塔安装说明.md`；`deploy/weiyang-agent.service`：systemd 服务；`deploy/apparmor-bwrap`：Ubuntu 23.10+ 放行沙箱
 - `Dockerfile`、`docker-compose.yml`、`.env.example`：Docker 部署
 - `web/`：网页（不需要构建）

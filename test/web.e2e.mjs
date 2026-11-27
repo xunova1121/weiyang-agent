@@ -18,6 +18,7 @@ import { createSettings } from '../server/settings.mjs';
 import { createMemory } from '../server/memory.mjs';
 import { startOpenAIBridge } from '../server/openaiBridge.mjs';
 import { startFakeOpenAI } from './fakeOpenAI.mjs';
+import { startFakeDeepseek } from './fakeDeepseek.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -25,11 +26,12 @@ const out = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'wa-shots-'
 fs.mkdirSync(out, { recursive: true });
 
 const model = await startFakeModel();
+const ds = await startFakeDeepseek({ key: 'fake' });
 const proxy = await startLoggingProxy();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-web-'));
 fs.mkdirSync(path.join(dataDir, 'workspace'), { recursive: true });
 fs.writeFileSync(path.join(dataDir, 'workspace', 'note.txt'), '浏览器里读到的笔记');
-const cfg = { dataDir, password: 'web-password-1', apiKey: 'fake', baseUrl: model.url, model: 'deepseek-flash' };
+const cfg = { dataDir, password: 'web-password-1', apiKey: 'fake', baseUrl: model.url, model: 'deepseek-flash', deepseekApi: ds.api };
 const extraEnv = { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
 useConfigDir(cfg);
 const settings = createSettings(cfg);
@@ -38,7 +40,8 @@ const oai = await startFakeOpenAI();
 const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv, settings, bridge }) }), cfg, settings, memory: createMemory(dataDir), sessions: createSessions(cfg), files: createFiles(path.join(dataDir, 'workspace')) });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch();
+// 假麦克风（Chromium 自带，会发出提示音），测语音输入用
+const browser = await chromium.launch({ args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
 const results = [];
 const check = (name, ok) => { results.push(ok); console.log(`${ok ? '✓' : '✗'} ${name}`); if (!ok) throw new Error(name); };
 try {
@@ -219,6 +222,44 @@ try {
     check(`${label} 设置相关没有页面脚本错误`, errors.length === 0);
     await page.close();
   }
+  // 上传附件、语音输入、朗读
+  for (const [label, viewport] of [['desktop', { width: 1280, height: 800 }], ['phone', { width: 390, height: 844 }]]) {
+    const page = await browser.newPage({ viewport });
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(base);
+    if (await page.isVisible('#login-form')) { await page.fill('#password', cfg.password); await page.click('#login-form button'); }
+    await page.waitForSelector('#chat:not([hidden])');
+    await page.click('#new-chat').catch(() => {});
+    await page.waitForSelector('#mic:not([hidden])');
+    check(`${label} 服务器有 DeepSeek 密钥时显示麦克风`, true);
+    await page.setInputFiles('#attach', { name: `${label}照片.png`, mimeType: 'image/png', buffer: Buffer.from('PNG') });
+    await page.waitForFunction((n) => document.querySelector('#prompt').value.includes(`（我上传了：上传/${n}照片.png）`), label);
+    check(`${label} 📎 上传后输入框里写上了文件路径`, fs.readFileSync(path.join(dataDir, 'workspace', '上传', `${label}照片.png`), 'utf8') === 'PNG');
+    const asrBefore = ds.requests.filter((r) => r.url === '/v1/tools/asr').length;
+    await page.click('#mic');
+    await page.waitForSelector('#mic.recording');
+    await page.waitForTimeout(1200);
+    await page.click('#mic');
+    await page.waitForFunction(() => document.querySelector('#prompt').value.includes('今天天气怎么样'), null, { timeout: 15000 });
+    const asrReq = ds.requests.filter((r) => r.url === '/v1/tools/asr').at(-1);
+    check(`${label} 🎤 录音转成 16kHz wav 交给识别，文字填进输入框`, ds.requests.filter((r) => r.url === '/v1/tools/asr').length === asrBefore + 1 && asrReq.audioName === 'speech.wav' && asrReq.audioSize > 16000);
+    check(`${label} 识别后麦克风回到待命`, !(await page.isVisible('#mic.recording')));
+    check(`${label} 输入框跟着内容长高，第一行没被挤出去`, await page.evaluate(() => { const p = document.querySelector('#prompt'); return p.scrollTop === 0 && p.scrollHeight <= p.clientHeight + 2; }));
+    await page.screenshot({ path: path.join(out, `${label}-composer.png`) });
+    await page.fill('#prompt', '你好');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.msg.agent + .speak:not([hidden])');
+    check(`${label} 发送后输入框缩回一行`, await page.evaluate(() => document.querySelector('#prompt').getBoundingClientRect().height < 60));
+    const ttsBefore = ds.requests.filter((r) => r.url === '/v1/tools/tts').length;
+    await page.click('.speak >> nth=-1');
+    await page.waitForFunction(() => [...document.querySelectorAll('.speak')].at(-1).textContent === '🔊 朗读' && !document.querySelector('#status').textContent.includes('失败'), null, { timeout: 15000 });
+    const ttsReq = ds.requests.filter((r) => r.url === '/v1/tools/tts');
+    check(`${label} 🔊 朗读：服务器转给 DeepSeek，放完回到“朗读”`, ttsReq.length === ttsBefore + 1 && ttsReq.at(-1).body.voice_id === 'stella' && ttsReq.at(-1).body.text.length > 0);
+    check(`${label} 上传、语音没有页面脚本错误`, errors.length === 0);
+    await page.close();
+  }
+  ds.server.close();
   oai.server.close(); bridge.close();
   check('全程没有往外连', proxy.attempts.length === 0);
   console.log(`网页端到端 ${results.length}/${results.length} 通过；截图在 ${out}`);

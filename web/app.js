@@ -143,7 +143,7 @@ function handle(ev) {
     case 'permission': askCard(ev); break;
     case 'permission_answered': answered(ev); break;
     case 'notice': status(ev.text); break;
-    case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; return 'end';
+    case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; speakButton(current.bubble); return 'end';
     case 'stopped': current.bubble.textContent += (current.bubble.textContent ? '\n' : '') + '（已停止）'; return 'end';
     case 'error': add('msg agent error', ev.error); return 'end';
   }
@@ -312,7 +312,7 @@ function renderHistory(items) {
   $('transcript').replaceChildren();
   for (const it of items) {
     if (it.role === 'user') add('msg user', it.text);
-    else if (it.role === 'agent') add('msg agent', it.text);
+    else if (it.role === 'agent') speakButton(add('msg agent', it.text));
     else if (it.role === 'tool') toolCard(it);
   }
 }
@@ -571,8 +571,16 @@ $('composer').addEventListener('submit', (e) => {
   const text = $('prompt').value.trim();
   if (!text || current) return;
   $('prompt').value = '';
+  fitPrompt();
   send(text);
 });
+/** 输入框跟着内容长高（最多屏幕 40%，见 style.css 的 max-height） */
+function fitPrompt() {
+  const p = $('prompt');
+  p.style.height = 'auto';
+  p.style.height = `${p.scrollHeight + 2}px`;
+}
+$('prompt').addEventListener('input', fitPrompt);
 $('prompt').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('composer').requestSubmit(); }
 });
@@ -586,11 +594,122 @@ $('files').addEventListener('click', (e) => { if (e.target === $('files')) close
 $('upload').addEventListener('change', (e) => { upload([...e.target.files]); e.target.value = ''; });
 $('logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); store.set(TOKEN, null); show('login'); });
 
+/* ---------- 上传附件、语音 ---------- */
+let voiceOn = false;
+
+/** 📎 或粘贴：传到工作文件夹的“上传”里，并在输入框里写上路径，让未央知道是哪个文件 */
+async function attach(list) {
+  for (const file of list) {
+    const name = file.name && file.name !== 'image.png' ? file.name : `粘贴的图片-${Date.now()}.${(file.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`;
+    status(`正在上传 ${name}…`);
+    const res = await api(`/api/files/upload?dir=${encodeURIComponent('上传')}&name=${encodeURIComponent(name)}`, { method: 'POST', rawBody: file }).catch(() => null);
+    if (!res?.ok) { status(`${name} 上传失败：${(await res?.json().catch(() => ({})))?.error || '连不上服务器'}`); return; }
+    const { path: saved } = await res.json();
+    const p = $('prompt');
+    p.value = `${p.value}${p.value && !p.value.endsWith('\n') ? '\n' : ''}（我上传了：${saved}）\n`;
+    p.dispatchEvent(new Event('input'));
+  }
+  status('');
+  $('prompt').focus();
+}
+$('attach').addEventListener('change', (e) => { attach([...e.target.files]); e.target.value = ''; });
+$('prompt').addEventListener('paste', (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (files.length) { e.preventDefault(); attach(files); }
+});
+
+/** 16kHz 单声道 WAV（DeepSeek 语音识别收 wav/ogg；浏览器录出来多是 webm，先转一下） */
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) { const s = Math.max(-1, Math.min(1, samples[i])); v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true); }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+async function toWav16k(blob) {
+  const ctx = new AudioContext();
+  let audio;
+  try { audio = await ctx.decodeAudioData(await blob.arrayBuffer()); } finally { ctx.close().catch(() => {}); }
+  const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(audio.duration * 16000)), 16000);
+  const src = off.createBufferSource();
+  src.buffer = audio; src.connect(off.destination); src.start();
+  return encodeWav((await off.startRendering()).getChannelData(0), 16000);
+}
+
+let recorder = null;
+async function toggleMic() {
+  if (recorder) { recorder.stop(); return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { status('没拿到麦克风（要用 https 打开网页，并允许使用麦克风）'); return; }
+  const chunks = [];
+  const rec = new MediaRecorder(stream);
+  recorder = rec;
+  const limit = setTimeout(() => rec.state === 'recording' && rec.stop(), 110_000); // 接口最多约两分钟
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  rec.onstop = async () => {
+    clearTimeout(limit);
+    for (const t of stream.getTracks()) t.stop();
+    recorder = null;
+    $('mic').classList.remove('recording'); $('mic').textContent = '🎤';
+    status('正在识别…');
+    try {
+      const wav = await toWav16k(new Blob(chunks, { type: rec.mimeType }));
+      const res = await api('/api/voice/asr', { method: 'POST', rawBody: wav, headers: { 'Content-Type': 'audio/wav' } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { status(data.error || '识别失败'); return; }
+      if (!data.text) { status('没听清，再说一次'); return; }
+      const p = $('prompt');
+      p.value = p.value ? `${p.value} ${data.text}` : data.text;
+      p.dispatchEvent(new Event('input'));
+      p.focus();
+      status('');
+    } catch { status('识别失败（录音格式转换或网络出错）'); }
+  };
+  rec.start();
+  $('mic').classList.add('recording'); $('mic').textContent = '⏹';
+  status('正在听…再点一次结束');
+}
+$('mic').addEventListener('click', toggleMic);
+
+/** 回复下面的 🔊：服务器用 DeepSeek 朗读，再点一次停 */
+let playing = null;
+function speakButton(bubble) {
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'speak'; b.textContent = '🔊 朗读'; b.hidden = !voiceOn;
+  b.addEventListener('click', async () => {
+    if (playing?.button === b) { playing.audio.pause(); playing = null; b.textContent = '🔊 朗读'; return; }
+    if (playing) { playing.audio.pause(); playing.button.textContent = '🔊 朗读'; playing = null; }
+    const text = bubble.textContent.trim();
+    if (!text) return;
+    b.textContent = '…'; b.disabled = true;
+    try {
+      const res = await api('/api/voice/tts', { method: 'POST', body: { text: text.slice(0, 4000) } });
+      if (!res.ok) { status((await res.json().catch(() => ({}))).error || '朗读失败'); b.textContent = '🔊 朗读'; return; }
+      const url = URL.createObjectURL(await res.blob());
+      const audio = new Audio(url);
+      playing = { audio, button: b };
+      audio.addEventListener('ended', () => { URL.revokeObjectURL(url); if (playing?.audio === audio) playing = null; b.textContent = '🔊 朗读'; });
+      b.textContent = '⏹ 停止';
+      await audio.play();
+    } catch { status('朗读失败'); b.textContent = '🔊 朗读'; } finally { b.disabled = false; }
+  });
+  bubble.after(b);
+  return b;
+}
+
 async function enter() {
   show('chat');
   loadModels();
   let st = null;
   try { const res = await api('/api/status'); if (res.ok) st = await res.json(); } catch { return; }
+  voiceOn = Boolean(st?.voice);
+  $('mic').hidden = !voiceOn || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined';
+  for (const b of document.querySelectorAll('.speak')) b.hidden = !voiceOn;
   await refreshList();
   const running = st?.running;
   const target = running?.sessionId || sessionId;

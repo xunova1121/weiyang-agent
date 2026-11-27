@@ -20,6 +20,7 @@
  *   DELETE /api/settings/providers/:id
  *   POST /api/settings/default        {model}
  *   POST /api/settings/services/:id   {key}（key 为 null 表示清除）
+ *   POST /api/voice/asr               请求体是录音（wav/ogg，最多 8MB）→ {text}；POST /api/voice/tts {text, voice} → wav
  *   GET  /api/memory                  长期记忆；POST {text} 加一条；PUT /api/memory/:id {text} 改；DELETE /api/memory/:id 删
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
@@ -29,6 +30,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_UPLOAD } from './files.mjs';
+import { asr, MAX_AUDIO, tts, VOICES } from './deepseekMedia.mjs';
 
 const WEB_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
@@ -50,6 +52,37 @@ async function readJson(req) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); }
   catch { throw Object.assign(new Error('请求格式不对'), { status: 400 }); }
+}
+
+async function readRaw(req, limit) {
+  if (Number(req.headers['content-length'] || 0) > limit) throw Object.assign(new Error('内容太大'), { status: 413 });
+  let size = 0;
+  const chunks = [];
+  for await (const c of req) {
+    size += c.length;
+    if (size > limit) throw Object.assign(new Error('内容太大'), { status: 413 });
+    chunks.push(c);
+  }
+  return Buffer.concat(chunks);
+}
+
+/** 语音：录音转文字、朗读。用服务器的 DeepSeek 密钥，浏览器拿不到 */
+async function voiceApi(req, res, cfg, pathname) {
+  try {
+    if (pathname === '/api/voice/asr') {
+      const type = /ogg/i.test(String(req.headers['content-type'] || '')) ? 'audio/ogg' : 'audio/wav';
+      return json(res, 200, { text: await asr(cfg, { buffer: await readRaw(req, MAX_AUDIO), type }) });
+    }
+    const { text, voice = VOICES[0] } = await readJson(req);
+    const wav = await tts(cfg, { text, voice });
+    res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': wav.length, 'Cache-Control': 'no-store' });
+    return res.end(wav);
+  } catch (e) {
+    if (e.status === 413) return json(res, 413, { error: '录音太长（最多 8MB，约两分钟）' });
+    if (e.status === 400) return json(res, 400, { error: e.message });
+    if (!e.userFacing) console.warn('[语音出错]', String(e?.stack || e).slice(0, 500));
+    return json(res, e.userFacing ? 502 : 500, { error: e.userFacing ? e.message : '语音服务出错了' });
+  }
 }
 
 function bearer(req) {
@@ -107,9 +140,10 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files, settings =
         if (pathname === '/api/logout' && req.method === 'POST') { auth.logout(token); return json(res, 200, { ok: true }); }
         if (pathname === '/api/status' && req.method === 'GET') {
           const running = tasks.running && tasks.get(tasks.running);
-          return json(res, 200, { ok: true, model: settings ? settings.defaultModel() : cfg.model, commands: Boolean(cfg.commands), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
+          return json(res, 200, { ok: true, model: settings ? settings.defaultModel() : cfg.model, commands: Boolean(cfg.commands), voice: Boolean(cfg.apiKey), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
         }
         if (pathname === '/api/sessions' && req.method === 'GET') return json(res, 200, await sessions.list());
+        if ((pathname === '/api/voice/asr' || pathname === '/api/voice/tts') && req.method === 'POST') return voiceApi(req, res, cfg, pathname);
         if (memory && (pathname === '/api/memory' || pathname.startsWith('/api/memory/'))) {
           if (pathname === '/api/memory' && req.method === 'GET') return json(res, 200, { items: memory.list() });
           if (pathname === '/api/memory' && req.method === 'POST') { const r = memory.add((await readJson(req)).text); return r.error ? json(res, 400, r) : json(res, 200, r); }
