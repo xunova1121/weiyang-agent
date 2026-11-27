@@ -67,6 +67,16 @@ mkdir -p "$DATA"
 chown weiyang:weiyang "$DATA"
 chmod 700 "$DATA"
 
+# Node 装在 weiyang 账号进不去的地方（比如 nvm 装在 /root/.nvm）：复制一份到 /usr/local/bin/node-weiyang 给服务用。
+# 每次安装/升级都重新复制，Node 升级后跟着更新
+RUN_NODE="$NODE"
+if ! su -s /bin/sh weiyang -c "\"$NODE\" -v" >/dev/null 2>&1; then
+  install -m 755 "$NODE" /usr/local/bin/node-weiyang
+  RUN_NODE=/usr/local/bin/node-weiyang
+  su -s /bin/sh weiyang -c "$RUN_NODE -v" >/dev/null 2>&1 || die "复制出来的 $RUN_NODE 还是不能用，请把 Node 装到 /usr/local 等公共位置"
+  say "Node 在 weiyang 账号读不到的目录里（$NODE），已复制一份到 $RUN_NODE"
+fi
+
 # 4. 依赖
 say "安装依赖（$REG，一般 1～3 分钟）"
 cd "$APP"
@@ -100,7 +110,7 @@ else
 fi
 
 # 6. 系统服务（用本机实际的 node 路径和端口）
-sed -e "s|^ExecStart=.*|ExecStart=$NODE server/main.mjs|" \
+sed -e "s|^ExecStart=.*|ExecStart=$RUN_NODE server/main.mjs|" \
     -e "s|^WorkingDirectory=.*|WorkingDirectory=$APP|" \
     -e "s|PORT=8797|PORT=$PORT|" \
     "$APP/deploy/weiyang-agent.service" > "$UNIT"
