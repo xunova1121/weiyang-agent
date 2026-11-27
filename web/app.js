@@ -141,13 +141,14 @@ function handle(ev) {
   switch (ev.type) {
     case 'task_created': current.id = ev.id; break;
     case 'session': if (ev.sessionId !== sessionId) { setSession(ev.sessionId); refreshList(); } break;
-    case 'text': current.bubble.textContent += ev.delta; current.bubble.scrollIntoView({ block: 'end' }); break;
+    case 'text': if (!current.bubble.textContent && /^正在思考/.test($('status').textContent)) status(''); current.bubble.textContent += ev.delta; current.bubble.scrollIntoView({ block: 'end' }); break;
     case 'tool': toolCard(ev, current.bubble); break;
     case 'tool_result': toolResult(ev); break;
     case 'permission': askCard(ev); break;
     case 'permission_answered': answered(ev); break;
     case 'notice': status(ev.text); break;
-    case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; speakButton(current.bubble); notifyDone(current.bubble.textContent); return 'end';
+    case 'thinking': if (!current.bubble.textContent) status(`正在思考…（已想 ${ev.chars} 字）`); break;
+    case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; speakButton(current.bubble); notifyDone(current.bubble.textContent); timingLine(current.bubble, ev.timing); return 'end';
     case 'stopped': current.bubble.textContent += (current.bubble.textContent ? '\n' : '') + '（已停止）'; return 'end';
     case 'error': add('msg agent error', ev.error); return 'end';
   }
@@ -768,6 +769,16 @@ function speakButton(bubble) {
   });
   bubble.after(b);
   return b;
+}
+
+/** 回复下面一行小字：用了多久（排查“回答慢”：是等第一个字久，还是步骤多） */
+function timingLine(bubble, t) {
+  if (!t || !t.total) return;
+  const s = (ms) => (ms / 1000).toFixed(1);
+  const el = document.createElement('div');
+  el.className = 'timing';
+  el.textContent = [`用时 ${s(t.total)} 秒`, t.first ? `第一个字 ${s(t.first)} 秒` : '', t.calls > 1 ? `调了 ${t.calls} 次模型` : '', t.thinkingChars ? `先想了 ${t.thinkingChars} 字` : ''].filter(Boolean).join(' · ');
+  (bubble.nextElementSibling?.classList.contains('speak') ? bubble.nextElementSibling : bubble).after(el);
 }
 
 /* ---------- 回复做完时提醒 ---------- */

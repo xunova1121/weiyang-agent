@@ -342,6 +342,8 @@ try {
     await page.fill('#prompt', '在 App 里说句话');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.__shell.notify.length > 0);
+    await page.waitForSelector('.timing');
+    check('回复下面有一行用时（第一个字、共多久）', /用时 \d+\.\d 秒 · 第一个字 \d+\.\d 秒/.test(await page.textContent('.timing')));
     check('安卓 App：回复做完交给 App 通知（App 自己判断前后台）', await page.evaluate(() => window.__shell.notify[0].title === '未央回复好了' && window.__shell.notify[0].body.includes('收到：在 App 里说句话')));
     fs.writeFileSync(path.join(dataDir, 'workspace', '给手机.txt'), '下载到手机的内容');
     await page.click('#open-files');

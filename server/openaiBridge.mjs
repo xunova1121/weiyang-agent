@@ -27,7 +27,13 @@ function imagePart(block) {
   return null;
 }
 
-export function toOpenAIRequest(body, { model }) {
+/** SDK 这一轮要不要模型先思考（网页上的“深度思考”开关）；没带 thinking 字段就是不要 */
+export const wantsThinking = (body) => ['adaptive', 'enabled'].includes(body?.thinking?.type);
+
+/**
+ * @param {{ model: string, offParams?: boolean }} o  offParams：不思考时带上“别思考”的参数（这家服务商不认就传 false）
+ */
+export function toOpenAIRequest(body, { model, offParams = true }) {
   const messages = [];
   const system = typeof body.system === 'string' ? body.system : textOf(body.system);
   if (system) messages.push({ role: 'system', content: system });
@@ -71,9 +77,13 @@ export function toOpenAIRequest(body, { model }) {
     ...(typeof body.top_p === 'number' && { top_p: body.top_p }),
     ...(Array.isArray(body.stop_sequences) && body.stop_sequences.length && { stop: body.stop_sequences.slice(0, 4) }),
     stream: Boolean(body.stream),
-    ...(body.stream && { stream_options: { include_usage: true } })
+    ...(body.stream && { stream_options: { include_usage: true } }),
+    // 深度思考没开：叫上游别先思考（DeepSeek 一类认 thinking，通义 / 千帆一类认 enable_thinking；都不认的服务商会被记下来不再带）
+    ...(!wantsThinking(body) && offParams && THINK_OFF)
   };
 }
+
+export const THINK_OFF = { thinking: { type: 'disabled' }, enable_thinking: false };
 
 /* ---------------- 回复：OpenAI → Anthropic ---------------- */
 
@@ -97,7 +107,8 @@ export function fromOpenAIResponse(data, model) {
 /** 把 OpenAI 的流式片段一段段翻成 Anthropic 的流式事件 */
 export function createStreamTranslator(model, write) {
   const ev = (type, data) => write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
-  let started = false, index = -1, textOpen = false, finished = false;
+  let started = false, index = -1, textOpen = false, thinkOpen = false, finished = false;
+  const stats = { firstThinkingAt: 0, firstTextAt: 0, thinkingChars: 0 };
   const tools = new Map(); // OpenAI 工具调用序号 → 我们的块序号
   let stop = null, usage = { input_tokens: 0, output_tokens: 0 };
   const start = () => {
@@ -106,6 +117,7 @@ export function createStreamTranslator(model, write) {
     ev('message_start', { message: { id: newId(), type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage } });
   };
   const closeText = () => { if (textOpen) { ev('content_block_stop', { index }); textOpen = false; } };
+  const closeThink = () => { if (thinkOpen) { ev('content_block_delta', { index, delta: { type: 'signature_delta', signature: '' } }); ev('content_block_stop', { index }); thinkOpen = false; } };
   return {
     push(chunk) {
       start();
@@ -113,13 +125,24 @@ export function createStreamTranslator(model, write) {
       const choice = chunk.choices?.[0];
       if (!choice) return;
       const d = choice.delta || {};
+      // 思考过程（DeepSeek、千帆等放在 reasoning_content / reasoning 里）：翻成 thinking 块，网页上能看到“正在思考”
+      const think = d.reasoning_content || d.reasoning;
+      if (typeof think === 'string' && think) {
+        if (!stats.firstThinkingAt) stats.firstThinkingAt = Date.now();
+        stats.thinkingChars += think.length;
+        if (!thinkOpen) { closeText(); index++; thinkOpen = true; ev('content_block_start', { index, content_block: { type: 'thinking', thinking: '', signature: '' } }); }
+        ev('content_block_delta', { index, delta: { type: 'thinking_delta', thinking: think } });
+      }
       if (d.content) {
+        if (!stats.firstTextAt) stats.firstTextAt = Date.now();
+        closeThink();
         if (!textOpen) { index++; textOpen = true; ev('content_block_start', { index, content_block: { type: 'text', text: '' } }); }
         ev('content_block_delta', { index, delta: { type: 'text_delta', text: d.content } });
       }
       for (const c of d.tool_calls || []) {
         const key = c.index ?? 0;
         if (!tools.has(key)) {
+          closeThink();
           closeText();
           index++;
           tools.set(key, index);
@@ -133,11 +156,13 @@ export function createStreamTranslator(model, write) {
       if (finished) return;
       finished = true;
       start();
+      closeThink();
       closeText();
       for (const i of tools.values()) ev('content_block_stop', { index: i });
       ev('message_delta', { delta: { stop_reason: (tools.size ? 'tool_use' : STOP[stop]) || 'end_turn', stop_sequence: null }, usage: { output_tokens: usage.output_tokens } });
       ev('message_stop', {});
-    }
+    },
+    stats
   };
 }
 
@@ -155,6 +180,7 @@ function anthropicError(res, status, message) {
  */
 export async function startOpenAIBridge({ getProvider, fetchImpl = globalThis.fetch }) {
   const token = crypto.randomBytes(24).toString('base64url');
+  const noOffParams = new Set(); // 不认“别思考”参数的服务商（报过 400 的），以后不再带
   const server = http.createServer(async (req, res) => {
     try {
       const m = new URL(req.url, 'http://local').pathname.match(/^\/p\/([\w-]{1,40})\/v1\/messages(\/count_tokens)?$/);
@@ -168,19 +194,29 @@ export async function startOpenAIBridge({ getProvider, fetchImpl = globalThis.fe
       const chunks = [];
       for await (const c of req) { size += c.length; if (size > MAX_BODY) return anthropicError(res, 413, '请求太大'); chunks.push(c); }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-      const upstreamBody = toOpenAIRequest(body, { model: body.model });
       const ctrl = new AbortController();
       res.on('close', () => { if (!res.writableEnded) ctrl.abort(); });
+      const t0 = Date.now();
+      const send = (offParams) => fetchImpl(provider.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
+        method: 'POST', signal: ctrl.signal,
+        headers: { 'content-type': 'application/json', authorization: 'Bearer ' + provider.apiKey },
+        body: JSON.stringify(toOpenAIRequest(body, { model: body.model, offParams }))
+      });
       let up;
       try {
-        up = await fetchImpl(provider.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
-          method: 'POST', signal: ctrl.signal,
-          headers: { 'content-type': 'application/json', authorization: 'Bearer ' + provider.apiKey },
-          body: JSON.stringify(upstreamBody)
-        });
+        const withOff = !wantsThinking(body) && !noOffParams.has(m[1]);
+        up = await send(withOff);
+        if (withOff && up.status === 400) {
+          // 可能是不认“别思考”的参数：去掉再试一次；成功了就记下这家以后不带
+          const first = await up.text().catch(() => '');
+          const retry = await send(false);
+          if (retry.ok) { noOffParams.add(m[1]); console.warn(`[翻译] 服务商 ${m[1]} 不认“别思考”的参数，以后不带（${first.slice(0, 120)}）`); }
+          up = retry;
+        }
       } catch (e) {
         return anthropicError(res, 502, `连不上模型服务商（${e.cause?.code || e.name}）`);
       }
+      const headersAt = Date.now();
       if (!up.ok) {
         // 上游报错原文可能很长或带请求编号，截短后转给 SDK；不会带我们的密钥（密钥只在请求头里）
         const detail = (await up.text().catch(() => '')).slice(0, 300).replace(/(sk-|Bearer\s+)[\w.-]{4,}/gi, '$1***');
@@ -208,6 +244,9 @@ export async function startOpenAIBridge({ getProvider, fetchImpl = globalThis.fe
       }
       tr.end();
       res.end();
+      // 用时（排查“回答慢”用）：服务商多久有响应、先想了多久、第一个字多久
+      const sec = (t) => (t ? ((t - t0) / 1000).toFixed(1) + ' 秒' : '无');
+      console.log(`[翻译用时] ${m[1]}/${body.model}：响应 ${sec(headersAt)}，开始思考 ${sec(tr.stats.firstThinkingAt)}（${tr.stats.thinkingChars} 字），第一个字 ${sec(tr.stats.firstTextAt)}，共 ${sec(Date.now())}`);
     } catch (e) {
       if (!res.headersSent) anthropicError(res, 500, '翻译出错：' + String(e?.message || e).slice(0, 200));
       else res.end();

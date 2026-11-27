@@ -220,6 +220,9 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
   // 自定义工具（联网搜索、记忆、文档……）：每轮新建一份，见 tools/
   const toolBox = createToolBox(cfg, { ...(toolModules && { modules: toolModules }), settings, sessionId });
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
+  // 用时（每条回复下面显示，也记日志）：第一个字、模型调了几次、先想了多少字
+  const timing = { firstText: 0, calls: 0, thinkingChars: 0 };
+  let thinkingShownAt = 0;
   try {
     const q = queryImpl({
       prompt: text,
@@ -282,9 +285,15 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
       }
       if (m.type === 'stream_event') {
         const ev = m.event;
-        if (ev?.type === 'message_start') streamedThisMessage = false;
+        if (ev?.type === 'message_start') { streamedThisMessage = false; if (!m.parent_tool_use_id) timing.calls++; }
+        // 模型在先思考：告诉网页“正在思考”，免得像卡住了（每秒最多一次）
+        if (ev?.type === 'content_block_delta' && ev.delta?.type === 'thinking_delta' && !m.parent_tool_use_id) {
+          timing.thinkingChars += String(ev.delta.thinking || '').length;
+          if (Date.now() - thinkingShownAt > 1000) { thinkingShownAt = Date.now(); emit({ type: 'thinking', chars: timing.thinkingChars }); }
+        }
         if (ev?.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && !m.parent_tool_use_id) {
           streamedThisMessage = true;
+          if (!timing.firstText) timing.firstText = Date.now() - t0;
           full += ev.delta.text;
           emit({ type: 'text', delta: ev.delta.text });
         }
@@ -315,7 +324,9 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
           emit({ type: 'error', error: `没有顺利完成：${why}`, sessionId: current });
           return;
         }
-        emit({ type: 'done', text: full || m.result || '', sessionId: current, ms: Date.now() - t0 });
+        const total = Date.now() - t0;
+        console.log(`[用时] ${conn.model}：第一个字 ${(timing.firstText / 1000).toFixed(1)} 秒，共 ${(total / 1000).toFixed(1)} 秒，调了 ${timing.calls} 次模型${timing.thinkingChars ? `，先想了 ${timing.thinkingChars} 字` : ''}`);
+        emit({ type: 'done', text: full || m.result || '', sessionId: current, ms: total, timing: { first: timing.firstText, total, calls: timing.calls, thinkingChars: timing.thinkingChars } });
         return;
       }
     }

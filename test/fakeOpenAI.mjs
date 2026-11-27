@@ -2,6 +2,8 @@
  * 测试用的假 OpenAI 格式模型（/v1/chat/completions，流式和非流式都支持）。
  *   - 最后一条是工具结果 → 回“工具结果：<内容>”
  *   - 用户说“读文件 X” → 调用 Read 工具（参数分两段流式发出，验证翻译能拼起来）
+ *   - 用户说“先思考 …” → 先发一段 reasoning_content（像 DeepSeek / 千帆那样），再回答
+ *   - strict=true 时：请求里带了不认识的参数（thinking / enable_thinking）就回 400（像严格校验的服务商）
  *   - 其他 → 回“OpenAI收到：<原话>”
  */
 import http from 'node:http';
@@ -19,7 +21,7 @@ function lastUserText(messages) {
   return { text: '' };
 }
 
-export function startFakeOpenAI() {
+export function startFakeOpenAI({ strict = false } = {}) {
   const requests = [];
   const server = http.createServer(async (req, res) => {
     let body = '';
@@ -33,6 +35,7 @@ export function startFakeOpenAI() {
     }
     if (req.url !== '/v1/chat/completions') { res.writeHead(404); return res.end('{"error":{"message":"no"}}'); }
     if (req.headers.authorization !== 'Bearer sk-openai-test-key') { res.writeHead(401, { 'content-type': 'application/json' }); return res.end('{"error":{"message":"Incorrect API key provided: sk-openai-WRONG-1234"}}'); }
+    if (strict && ('thinking' in j || 'enable_thinking' in j)) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end('{"error":{"message":"Unrecognized request argument supplied: enable_thinking"}}'); }
     const last = lastUserText(j.messages || []);
     let text = null, call = null;
     if (last.tool !== undefined) text = `工具结果：${String(last.tool).slice(0, 200)}`;
@@ -52,6 +55,10 @@ export function startFakeOpenAI() {
       send({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: call.args.slice(half) } }] } }] });
       send({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
     } else {
+      if (/^先思考/.test(last.text || '')) {
+        send({ choices: [{ index: 0, delta: { role: 'assistant', reasoning_content: '让我想想' } }] });
+        send({ choices: [{ index: 0, delta: { reasoning_content: '……想好了' } }] });
+      }
       const half = Math.ceil(text.length / 2);
       send({ choices: [{ index: 0, delta: { role: 'assistant', content: text.slice(0, half) } }] });
       send({ choices: [{ index: 0, delta: { content: text.slice(half) } }] });
