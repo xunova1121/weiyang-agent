@@ -15,7 +15,11 @@ if (!base || !password) { console.error('用法：node test/server.smoke.mjs <�
 const results = [];
 const check = (name, ok, extra = '') => { results.push(ok); console.log(`${ok ? '✓' : '✗'} ${name}${extra ? ' — ' + extra : ''}`); if (!ok) throw new Error(name); };
 
-const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) });
+const login = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }).catch((e) => {
+  // 连不上时说人话：多半是服务没在运行
+  console.error(`✗ 连不上 ${base}（${e.cause?.code || e.message}）：服务多半没在运行。看日志：journalctl -u weiyang-agent -n 30 --no-pager`);
+  process.exit(1);
+});
 check('登录', login.ok);
 const { token } = await login.json();
 const H = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
