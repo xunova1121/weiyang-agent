@@ -26,6 +26,11 @@ export function startFakeOpenAI() {
     for await (const c of req) body += c;
     const j = body ? JSON.parse(body) : {};
     requests.push({ url: req.url, auth: req.headers.authorization || '', body: j });
+    if (req.url === '/v1/models' && req.method === 'GET') {
+      if (req.headers.authorization !== 'Bearer sk-openai-test-key') { res.writeHead(401); return res.end('{}'); }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ object: 'list', data: [{ id: 'gpt-desktop' }, { id: 'gpt-phone' }, { id: 'gpt-other' }] }));
+    }
     if (req.url !== '/v1/chat/completions') { res.writeHead(404); return res.end('{"error":{"message":"no"}}'); }
     if (req.headers.authorization !== 'Bearer sk-openai-test-key') { res.writeHead(401, { 'content-type': 'application/json' }); return res.end('{"error":{"message":"Incorrect API key provided: sk-openai-WRONG-1234"}}'); }
     const last = lastUserText(j.messages || []);

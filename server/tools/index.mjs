@@ -9,13 +9,15 @@ import * as search from './search.mjs';
 import * as memory from './memory.mjs';
 import * as vision from './vision.mjs';
 import * as documents from './documents.mjs';
+import * as history from './history.mjs';
 
-export const MODULES = [basic, search, memory, vision, documents];
+export const MODULES = [basic, search, memory, vision, documents, history];
 
-export function createToolBox(cfg, { modules = MODULES, settings = null } = {}) {
+export function createToolBox(cfg, { modules = MODULES, settings = null, sessionId = null } = {}) {
   const workspace = path.join(cfg.dataDir, 'workspace');
   // settings：取其他服务（千帆等）的密钥，见 settings.mjs
-  const ctx = { cfg, workspace, settings, resolve: workspaceResolver(workspace) };
+  // sessionId：当前这段对话（翻旧对话时跳过它）
+  const ctx = { cfg, workspace, settings, sessionId, resolve: workspaceResolver(workspace) };
   const defs = modules.flatMap((m) => m.tools(ctx) ?? []);
   return buildToolServer(defs, ctx);
 }

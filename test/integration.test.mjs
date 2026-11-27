@@ -76,7 +76,7 @@ test('发消息：同一连接先回任务编号，再逐段推回复；模型�
   const allNames = (req.body.tools || []).map((t) => t.name).filter((n) => n !== 'DeferredToolPlaceholder');
   // 自定义工具（mcp__weiyang__…）另外核对；内置工具仍然必须正好是这几样
   const toolNames = allNames.filter((n) => !n.startsWith('mcp__')).sort();
-  assert.deepEqual(allNames.filter((n) => n.startsWith('mcp__')).sort(), ['mcp__weiyang__ask_file', 'mcp__weiyang__convert_to_pdf', 'mcp__weiyang__create_document', 'mcp__weiyang__current_time', 'mcp__weiyang__deepseek_search', 'mcp__weiyang__forget', 'mcp__weiyang__read_document', 'mcp__weiyang__read_image', 'mcp__weiyang__read_url', 'mcp__weiyang__remember'], '自定义工具正好是登记过的这些');
+  assert.deepEqual(allNames.filter((n) => n.startsWith('mcp__')).sort(), ['mcp__weiyang__ask_file', 'mcp__weiyang__convert_to_pdf', 'mcp__weiyang__create_document', 'mcp__weiyang__current_time', 'mcp__weiyang__deepseek_search', 'mcp__weiyang__forget', 'mcp__weiyang__read_document', 'mcp__weiyang__read_image', 'mcp__weiyang__read_url', 'mcp__weiyang__remember', 'mcp__weiyang__search_conversations'], '自定义工具正好是登记过的这些');
   // 第二批起：只读 + 改文件（改文件每次要确认）；没开放跑命令时不给 Bash
   assert.deepEqual(toolNames, ['Edit', 'Glob', 'Grep', 'Read', 'Write'], '没开放跑命令时只给读写文件的工具');
   // 接着上一轮

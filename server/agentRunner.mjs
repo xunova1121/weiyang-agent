@@ -26,7 +26,9 @@ export const QUIET_ENV = {
   DISABLE_ERROR_REPORTING: '1',
   DISABLE_AUTOUPDATER: '1',
   // SDK 默认在系统提示最前面加一行按对话变化的标记，每段新对话都会让模型那边的“重复开头缓存”失效（约 1.2 万 token 要重读）
-  CLAUDE_CODE_ATTRIBUTION_HEADER: '0'
+  CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+  // SDK 自带的“文件记忆”要往工作文件夹外面写（路径守卫本来就挡着），白占系统提示；我们有自己的长期记忆和对话摘要
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1'
 };
 
 /**
@@ -90,7 +92,7 @@ export function sandboxSettings(cfg) {
   };
 }
 
-export function systemAppend({ commands, officeSkills = false, memory = '' }) {
+export function systemAppend({ commands, officeSkills = false, memory = '', episodes = '' }) {
   return [
     '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
     '用户在中国大陆，时间按北京时间。',
@@ -104,7 +106,9 @@ export function systemAppend({ commands, officeSkills = false, memory = '' }) {
     '要做 Word、PPT、Excel、PDF 文件时用 create_document（先把内容用 Markdown 写好，排版交给它），不要自己拼文件或写代码生成；读 Word、PPT、Excel、PDF 用 read_document；已有的 Word / PPT / Excel 转 PDF 用 convert_to_pdf，不要在命令里自己跑 soffice。生成后按回执告诉用户文件路径，用户在“文件”里下载。',
     ...(officeSkills ? ['文档分工：新建 Word / PPT / Excel / PDF 一律用 create_document（中文排版、公文、汇报 PPT 都做好了）；只有改用户已有的文件（保留原格式改字、修订痕迹、批注、按用户给的模板填写、往已有 PPT 加删页）、复杂 Excel 公式和重算、create_document 做不到的要求，才用 docx / pptx / xlsx 技能（Skill 工具）。技能里的命令一律写 python3（不是 python），脚本用技能目录的绝对路径，输出文件放工作文件夹里；用技能新建文件时也不要 npm install（不能联网）。沙箱里的命令不要跑 soffice / LibreOffice（起不来）：转 PDF 用 convert_to_pdf，Excel 重算用 recalc_excel，要看排版效果就先 convert_to_pdf 再 read_document。'] : []),
     '用户说“记住……”或说了以后用得上的称呼、偏好时，用记忆工具记下来（会先问用户）；不要记密码、密钥、证件号。',
-    ...(memory ? [memory] : [])
+    '用户提到以前聊过的事（“上次说的……”“之前那份文件”）时，先看下面的对话摘要，不够细再用 search_conversations 找原话；找不到就直说，不要编。',
+    ...(memory ? [memory] : []),
+    ...(episodes ? [episodes] : [])
   ].join('\n');
 }
 
@@ -192,7 +196,7 @@ function grant(sessionId, name) {
  * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, ask: (req: object) => Promise<'allow'|'always'|'deny'>,
  *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function, toolModules?: Array }} o
  */
-export async function runAgent(cfg, { text, sessionId = null, model = null, think = false, emit, ask, signal, extraEnv, queryImpl = query, toolModules, settings = null, bridge = null }) {
+export async function runAgent(cfg, { text, sessionId = null, model = null, think = false, episodes = null, emit, ask, signal, extraEnv, queryImpl = query, toolModules, settings = null, bridge = null }) {
   // 这一轮用哪个模型：网页上选的（provider/model），没选或不认识就用默认的；没有设置（测试里）就用服务器配置
   const conn = connectionFor(cfg, { settings, bridge, model });
   const workspace = path.join(cfg.dataDir, 'workspace');
@@ -214,7 +218,7 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
   const skillsOn = Boolean(cfg.commands && cfg.officeSkills);
   const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : []), ...(skillsOn ? ['Skill'] : [])];
   // 自定义工具（联网搜索、记忆、文档……）：每轮新建一份，见 tools/
-  const toolBox = createToolBox(cfg, { ...(toolModules && { modules: toolModules }), settings });
+  const toolBox = createToolBox(cfg, { ...(toolModules && { modules: toolModules }), settings, sessionId });
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
   try {
     const q = queryImpl({
@@ -227,7 +231,7 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, thin
         // （关掉时 SDK 不发 thinking 字段，按 Anthropic 接口的规矩就是不思考；思考强度也降到最低）
         ...(think ? { thinking: { type: 'adaptive' }, effort: 'high' } : { thinking: { type: 'disabled' }, effort: 'low' }),
         settingSources: [], // 不读服务器上任何 ~/.claude 或项目里的设置、规则
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands), officeSkills: skillsOn, memory: createMemory(cfg.dataDir).promptBlock() }) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands), officeSkills: skillsOn, memory: createMemory(cfg.dataDir).promptBlock(), episodes: episodes?.promptBlock(sessionId) || '' }) },
         tools,
         // 不用 allowedTools 免确认：每次调用都先过路径守卫钩子，再由下面的 canUseTool 决定
         permissionMode: 'default',

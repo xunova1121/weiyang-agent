@@ -78,6 +78,8 @@
           <p id="pf-hint" class="muted"></p>
           <label>密钥<input id="pf-key" type="password" autocomplete="off" placeholder="改的时候留空表示不变"></label>
           <label>型号（多个用逗号隔开）<input id="pf-models" required placeholder="例如 kimi-k2, kimi-k2-turbo"></label>
+          <div class="row"><button type="button" id="pf-fetch" class="ghost">从服务商拉取模型列表</button><span id="pf-fetch-note" class="muted"></span></div>
+          <div id="pf-fetched" class="chips" hidden></div>
           <div class="actions"><button type="submit">保存</button><button type="button" id="pf-cancel" class="ghost">取消</button></div>
           <p id="pf-error" class="error"></p>
         </form>
@@ -90,6 +92,9 @@
       <ul id="memories" class="file-list"></ul>
       <form id="memory-form" class="svc"><div class="row"><input id="memory-new" maxlength="300" placeholder="加一条，例如：我叫小徐，回答尽量简短" aria-label="新的记忆"><button type="submit">加上</button></div></form>
       <p id="memory-error" class="error"></p>
+      <h3>最近对话的摘要</h3>
+      <p class="muted">一段对话停下 10 分钟或你换到别的对话后，未央会自动写两三句摘要，新对话里就知道“上次聊到……”。不想让它记着的可以删掉；删对话时摘要也会一起删。</p>
+      <ul id="episodes" class="file-list"></ul>
     </div>
   </section>
   <script type="module" src="/app.js"></script>

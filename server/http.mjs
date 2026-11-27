@@ -20,7 +20,9 @@
  *   DELETE /api/settings/providers/:id
  *   POST /api/settings/default        {model}
  *   POST /api/settings/services/:id   {key}（key 为 null 表示清除）
+ *   POST /api/settings/models/fetch   {id?, format, baseUrl, apiKey?}  从服务商拉取模型列表（密钥留空时用已存的那个）
  *   POST /api/voice/asr               请求体是录音（wav/ogg，最多 8MB）→ {text}；POST /api/voice/tts {text, voice} → wav
+ *   GET  /api/episodes                对话摘要（跨对话记忆）；DELETE /api/episodes/:sessionId 删一段
  *   GET  /api/memory                  长期记忆；POST {text} 加一条；PUT /api/memory/:id {text} 改；DELETE /api/memory/:id 删
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
@@ -30,6 +32,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAX_UPLOAD } from './files.mjs';
+import { fetchModels } from './modelList.mjs';
 import { asr, MAX_AUDIO, tts, VOICES } from './deepseekMedia.mjs';
 
 const WEB_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
@@ -122,7 +125,7 @@ function attachment(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-export function createHttpServer({ auth, tasks, cfg, sessions, files, settings = null, memory = null }) {
+export function createHttpServer({ auth, tasks, cfg, sessions, files, settings = null, memory = null, episodes = null }) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     const { pathname } = url;
@@ -144,6 +147,9 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files, settings =
         }
         if (pathname === '/api/sessions' && req.method === 'GET') return json(res, 200, await sessions.list());
         if ((pathname === '/api/voice/asr' || pathname === '/api/voice/tts') && req.method === 'POST') return voiceApi(req, res, cfg, pathname);
+        if (episodes && pathname === '/api/episodes' && req.method === 'GET') return json(res, 200, { items: episodes.list() });
+        const em = pathname.match(/^\/api\/episodes\/([\w-]{1,80})$/);
+        if (episodes && em && req.method === 'DELETE') return episodes.remove(em[1]) ? json(res, 200, { ok: true }) : json(res, 404, { error: '没有这段摘要' });
         if (memory && (pathname === '/api/memory' || pathname.startsWith('/api/memory/'))) {
           if (pathname === '/api/memory' && req.method === 'GET') return json(res, 200, { items: memory.list() });
           if (pathname === '/api/memory' && req.method === 'POST') { const r = memory.add((await readJson(req)).text); return r.error ? json(res, 400, r) : json(res, 200, r); }
@@ -159,6 +165,12 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files, settings =
           const pm = pathname.match(/^\/api\/settings\/providers\/([\w-]{1,40})$/);
           if (pm && req.method === 'DELETE') return settings.removeProvider(pm[1]) ? json(res, 200, { ok: true }) : json(res, 404, { error: '没有这个服务商（服务器配置的 DeepSeek 不能删）' });
           if (pathname === '/api/settings/default' && req.method === 'POST') return settings.setDefault(String((await readJson(req)).model ?? '')) ? json(res, 200, { ok: true }) : json(res, 400, { error: '没有这个模型' });
+          if (pathname === '/api/settings/models/fetch' && req.method === 'POST') {
+            const b = await readJson(req);
+            const saved = typeof b.id === 'string' ? settings.provider(b.id) : null;
+            const r = await fetchModels({ format: b.format === 'openai' ? 'openai' : 'anthropic', baseUrl: b.baseUrl || saved?.baseUrl, apiKey: String(b.apiKey ?? '').trim() || saved?.apiKey || '' });
+            return json(res, r.error ? 400 : 200, r);
+          }
           const sm2 = pathname.match(/^\/api\/settings\/services\/([\w-]{1,40})$/);
           if (sm2 && req.method === 'POST') { const r = settings.setService(sm2[1], (await readJson(req)).key); return r.error ? json(res, 400, r) : json(res, 200, r); }
         }
@@ -187,7 +199,9 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files, settings =
           if (rename && req.method === 'POST') return (await sessions.rename(id, (await readJson(req)).title ?? '')) ? json(res, 200, { ok: true }) : json(res, 404, { error: '找不到这段对话' });
           if (!rename && req.method === 'DELETE') {
             if (tasks.running && tasks.get(tasks.running)?.sessionId === id) return json(res, 409, { error: '这段对话正在回复，先停止再删' });
-            return (await sessions.remove(id)) ? json(res, 200, { ok: true }) : json(res, 404, { error: '找不到这段对话' });
+            if (!(await sessions.remove(id))) return json(res, 404, { error: '找不到这段对话' });
+            episodes?.remove(id); // 对话删了，它的摘要也删
+            return json(res, 200, { ok: true });
           }
         }
         if (pathname === '/api/tasks' && req.method === 'POST') {

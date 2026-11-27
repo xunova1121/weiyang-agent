@@ -11,6 +11,8 @@ import { createSettings } from './settings.mjs';
 import { createMemory } from './memory.mjs';
 import { startOpenAIBridge } from './openaiBridge.mjs';
 import { officeSkillsStatus } from './officeSkills.mjs';
+import { createEpisodes, modelSummarizer, withEpisodes } from './episodes.mjs';
+import { connectionFor } from './agentRunner.mjs';
 
 let cfg;
 try { cfg = loadConfig(); }
@@ -32,6 +34,9 @@ const auth = createAuth({ password: cfg.password, dataDir: cfg.dataDir });
 const settings = createSettings(cfg);
 // OpenAI 格式的模型经本机翻译服务转接（只在 127.0.0.1，带内部访问码）
 const bridge = await startOpenAIBridge({ getProvider: (id) => settings.provider(id) });
-const tasks = createTasks({ run: (o) => runAgent(cfg, { ...o, settings, bridge }), onBusy: busyMarker(cfg.dataDir) });
-const server = createHttpServer({ auth, tasks, cfg, settings, memory: createMemory(cfg.dataDir), sessions: createSessions(cfg), files: createFiles(workspaceDir(cfg)) });
+const sessions = createSessions(cfg);
+// 对话摘要（跨对话记忆）：用默认模型写，OpenAI 格式的也经本机翻译服务
+const episodes = createEpisodes(cfg, { sessions, summarize: modelSummarizer(() => connectionFor(cfg, { settings, bridge, model: null })) });
+const tasks = createTasks({ run: withEpisodes((o) => runAgent(cfg, { ...o, settings, bridge }), episodes), onBusy: busyMarker(cfg.dataDir) });
+const server = createHttpServer({ auth, tasks, cfg, settings, memory: createMemory(cfg.dataDir), episodes, sessions, files: createFiles(workspaceDir(cfg)) });
 server.listen(cfg.port, cfg.host, () => console.log(`未央 Agent 版已启动：http://${cfg.host}:${cfg.port}（模型 ${cfg.model}，接口 ${cfg.baseUrl}，跑命令${cfg.commands ? '已开放（沙箱内，每次需确认）' : '未开放'}，文档技能${cfg.officeSkills ? '已启用' : '未启用'}）`));

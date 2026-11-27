@@ -412,7 +412,29 @@ async function loadModels() {
 }
 
 let presets = [];
+async function loadEpisodes() {
+  const res = await api('/api/episodes').catch(() => null);
+  if (!res?.ok) return;
+  const { items } = await res.json();
+  $('episodes').replaceChildren(...(items.length ? items : [null]).map((it) => {
+    const li = document.createElement('li');
+    if (!it) { li.className = 'muted'; li.textContent = '还没有'; return li; }
+    const head = document.createElement('span');
+    head.className = 'name';
+    head.textContent = `${new Date(it.updatedAt).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })}「${it.title}」`;
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'mini'; del.textContent = '🗑'; del.title = '删除'; del.setAttribute('aria-label', '删除这段摘要');
+    del.addEventListener('click', async () => { await api(`/api/episodes/${encodeURIComponent(it.sessionId)}`, { method: 'DELETE' }).catch(() => null); loadEpisodes(); });
+    const sum = document.createElement('span');
+    sum.className = 'summary';
+    sum.textContent = it.summary;
+    li.append(head, del, sum);
+    return li;
+  }));
+}
+
 async function loadMemory() {
+  loadEpisodes();
   const res = await api('/api/memory').catch(() => null);
   if (!res?.ok) return;
   const { items } = await res.json();
@@ -526,6 +548,9 @@ function fillProvider(p) {
   $('pf-models').value = p?.models?.join(', ') || '';
   $('pf-error').textContent = '';
   $('pf-hint').textContent = '';
+  $('pf-fetch-note').textContent = '';
+  $('pf-fetched').hidden = true;
+  $('pf-fetched').replaceChildren();
 }
 
 $('pf-preset').addEventListener('change', () => {
@@ -535,6 +560,32 @@ $('pf-preset').addEventListener('change', () => {
   $('pf-format').value = p.format;
   $('pf-url').value = p.baseUrl;
   $('pf-hint').textContent = p.verified ? '' : '这个地址是从公开资料整理的，请以服务商官方文档为准；型号名也请照官方文档填。';
+});
+/** 拉取模型列表：勾选的型号写进上面的输入框（和手填的合在一起） */
+const typedModels = () => $('pf-models').value.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
+$('pf-fetch').addEventListener('click', async () => {
+  $('pf-fetch-note').textContent = '正在拉取…';
+  $('pf-fetch').disabled = true;
+  const body = { id: $('pf-id').value || undefined, format: $('pf-format').value, baseUrl: $('pf-url').value, apiKey: $('pf-key').value };
+  const res = await api('/api/settings/models/fetch', { method: 'POST', body }).catch(() => null);
+  $('pf-fetch').disabled = false;
+  const data = await res?.json().catch(() => null);
+  if (!res?.ok || !data?.models) { $('pf-fetch-note').textContent = data?.error || '拉取失败'; return; }
+  $('pf-fetch-note').textContent = `拉到 ${data.models.length} 个，勾选要用的：`;
+  const chosen = new Set(typedModels());
+  $('pf-fetched').replaceChildren(...data.models.map((m) => {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = m; cb.checked = chosen.has(m);
+    cb.addEventListener('change', () => {
+      const now = typedModels().filter((x) => x !== m);
+      if (cb.checked) now.push(m);
+      $('pf-models').value = now.join(', ');
+    });
+    label.append(cb, document.createTextNode(m));
+    return label;
+  }));
+  $('pf-fetched').hidden = false;
 });
 $('pf-cancel').addEventListener('click', () => { fillProvider(null); $('provider-form-box').open = false; });
 $('provider-form').addEventListener('submit', async (e) => {

@@ -185,7 +185,11 @@ try {
       await page.fill('#pf-name', name);
       await page.fill('#pf-url', oai.url);
       await page.fill('#pf-key', 'sk-openai-test-key');
-      await page.fill('#pf-models', `gpt-${label}`);
+      await page.click('#pf-fetch');
+      await page.waitForSelector('#pf-fetched:not([hidden]) input');
+      check(`${label} 从服务商拉到模型列表`, (await page.textContent('#pf-fetch-note')).includes('拉到 3 个') && (await page.$$('#pf-fetched input')).length === 3);
+      await page.check(`#pf-fetched input[value="gpt-${label}"]`);
+      check(`${label} 勾选的型号写进了型号栏`, (await page.inputValue('#pf-models')) === `gpt-${label}`);
       await page.click('#provider-form button[type=submit]');
       await page.waitForFunction((n) => document.querySelector('#providers').textContent.includes(n), name);
     }
@@ -200,7 +204,7 @@ try {
     await memRow.locator('button[aria-label="删除这条记忆"]').click();
     await page.waitForFunction((n) => ![...document.querySelectorAll('#memories input')].some((i) => i.value === n), note);
     check(`${label} 长期记忆能删掉`, true);
-    const gaps = await page.evaluate(() => ['#providers', '#services', '#memories'].map((q) => { const ul = document.querySelector(q); const items = [...ul.children].reduce((h, li) => h + li.getBoundingClientRect().height, 0); return ul.getBoundingClientRect().height - items; }));
+    const gaps = await page.evaluate(() => ['#providers', '#services', '#memories', '#episodes'].map((q) => { const ul = document.querySelector(q); const items = [...ul.children].reduce((h, li) => h + li.getBoundingClientRect().height, 0); return ul.getBoundingClientRect().height - items; }));
     check(`${label} 设置里的列表不留空白、不被截断`, gaps.every((g) => Math.abs(g) < 8));
     const panelOverflow = await page.evaluate(() => { const r = document.querySelector('#settings .files-panel').getBoundingClientRect(); return r.left < 0 || r.right > innerWidth; });
     check(`${label} 设置面板不超出屏幕`, !panelOverflow);
