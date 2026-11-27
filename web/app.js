@@ -29,11 +29,11 @@ function setSession(id, title) {
   for (const li of $('sessions').children) li.classList.toggle('active', li.dataset.id === sessionId);
 }
 
-async function api(path, { method = 'GET', body, headers = {}, signal } = {}) {
+async function api(path, { method = 'GET', body, rawBody, headers = {}, signal } = {}) {
   const res = await fetch(path, {
     method, signal,
     headers: { ...(body && { 'Content-Type': 'application/json' }), Authorization: 'Bearer ' + (store.get(TOKEN) || ''), ...headers },
-    body: body && JSON.stringify(body)
+    body: rawBody ?? (body && JSON.stringify(body))
   });
   if (res.status === 401) { store.set(TOKEN, null); show('login'); throw new Error('登录已失效'); }
   return res;
@@ -207,6 +207,7 @@ async function run(start) {
     busy(false);
     current = null;
     refreshList();
+    if (!$('files').hidden) loadFiles();
   }
 }
 
@@ -317,6 +318,77 @@ function newChat() {
   $('transcript').replaceChildren();
 }
 
+/* ---------- 工作文件夹 ---------- */
+let filesPath = '';
+const size = (n) => (n == null ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
+
+async function loadFiles(p = filesPath) {
+  const res = await api('/api/files?path=' + encodeURIComponent(p)).catch(() => null);
+  if (!res?.ok) { $('files-note').textContent = '读不到这个文件夹'; return; }
+  const data = await res.json();
+  filesPath = data.path;
+  // 面包屑：工作文件夹 / a / b
+  const crumbs = $('crumbs');
+  crumbs.replaceChildren();
+  const parts = filesPath ? filesPath.split('/') : [];
+  const go = (label, target) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.addEventListener('click', () => loadFiles(target)); crumbs.append(b); };
+  go('工作文件夹', '');
+  parts.forEach((name, i) => { crumbs.append('/'); go(name, parts.slice(0, i + 1).join('/')); });
+  const ul = $('file-list');
+  ul.replaceChildren(...data.items.map(fileRow));
+  $('files-note').textContent = data.items.length ? (data.truncated ? '文件太多，只列出前 500 个' : '') : '这里还没有文件。未央写的文件、你上传的文件都会在这里。';
+}
+
+function fileRow(f) {
+  const li = document.createElement('li');
+  li.dataset.path = f.path;
+  const name = document.createElement('button');
+  name.type = 'button';
+  name.className = 'name';
+  name.textContent = (f.dir ? '📁 ' : '📄 ') + f.name;
+  name.title = f.dir ? '打开文件夹' : '下载';
+  name.addEventListener('click', () => (f.dir ? loadFiles(f.path) : download(f)));
+  const meta = document.createElement('span');
+  meta.className = 'meta';
+  meta.textContent = [size(f.size), when(f.modified)].filter(Boolean).join(' · ');
+  const del = document.createElement('button');
+  del.type = 'button'; del.className = 'mini'; del.textContent = '🗑'; del.title = '删除'; del.setAttribute('aria-label', '删除');
+  del.addEventListener('click', async () => {
+    if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = '确认删除？'; setTimeout(() => { del.dataset.armed = ''; del.textContent = '🗑'; }, 3000); return; }
+    await api('/api/files?path=' + encodeURIComponent(f.path), { method: 'DELETE' }).catch(() => null);
+    loadFiles();
+  });
+  li.append(name, meta, del);
+  return li;
+}
+
+/** 下载要带登录令牌，所以先取回来再交给浏览器保存 */
+async function download(f) {
+  const res = await api('/api/files/download?path=' + encodeURIComponent(f.path)).catch(() => null);
+  if (!res?.ok) { $('files-note').textContent = '下载失败'; return; }
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = f.name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+async function upload(list) {
+  for (const file of list) {
+    $('files-note').textContent = `正在上传 ${file.name}…`;
+    const res = await api(`/api/files/upload?dir=${encodeURIComponent(filesPath)}&name=${encodeURIComponent(file.name)}`, { method: 'POST', rawBody: file }).catch(() => null);
+    if (!res?.ok) { $('files-note').textContent = `${file.name} 上传失败：${(await res?.json().catch(() => ({})))?.error || '连不上服务器'}`; return; }
+  }
+  $('files-note').textContent = '';
+  loadFiles();
+}
+
+function openFiles() { $('files').hidden = false; loadFiles(); }
+function closeFiles() { $('files').hidden = true; }
+
 /* ---------- 侧栏（手机上是抽屉） ---------- */
 function openSide() { $('side').classList.add('open'); $('scrim').hidden = false; $('toggle-side').setAttribute('aria-expanded', 'true'); }
 function closeSide() { $('side').classList.remove('open'); $('scrim').hidden = true; $('toggle-side').setAttribute('aria-expanded', 'false'); }
@@ -346,6 +418,10 @@ $('stop').addEventListener('click', () => { if (current?.id) api(`/api/tasks/${c
 $('new-chat').addEventListener('click', () => { newChat(); closeSide(); });
 $('toggle-side').addEventListener('click', () => ($('side').classList.contains('open') ? closeSide() : openSide()));
 $('scrim').addEventListener('click', closeSide);
+$('open-files').addEventListener('click', openFiles);
+$('close-files').addEventListener('click', closeFiles);
+$('files').addEventListener('click', (e) => { if (e.target === $('files')) closeFiles(); });
+$('upload').addEventListener('change', (e) => { upload([...e.target.files]); e.target.value = ''; });
 $('logout').addEventListener('click', async () => { await api('/api/logout', { method: 'POST' }).catch(() => {}); store.set(TOKEN, null); show('login'); });
 
 async function enter() {

@@ -10,6 +10,10 @@
  *   GET  /api/sessions/:id            一段对话的历史
  *   POST /api/sessions/:id/rename     {title}
  *   DELETE /api/sessions/:id
+ *   GET  /api/files?path=             工作文件夹里列目录
+ *   GET  /api/files/download?path=    下载
+ *   POST /api/files/upload?dir=&name= 上传（请求体就是文件内容，最多 20MB；重名自动加序号）
+ *   DELETE /api/files?path=
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
  */
@@ -17,6 +21,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MAX_UPLOAD } from './files.mjs';
 
 const WEB_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json' };
@@ -71,7 +76,13 @@ function serveStatic(req, res, pathname) {
   fs.createReadStream(file).pipe(res);
 }
 
-export function createHttpServer({ auth, tasks, cfg, sessions }) {
+/** 下载文件名：中文名用 RFC 5987 写法，老浏览器看到的是去掉非 ASCII 的名字 */
+function attachment(name) {
+  const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
+export function createHttpServer({ auth, tasks, cfg, sessions, files }) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     const { pathname } = url;
@@ -90,6 +101,24 @@ export function createHttpServer({ auth, tasks, cfg, sessions }) {
           return json(res, 200, { ok: true, model: cfg.model, commands: Boolean(cfg.commands), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
         }
         if (pathname === '/api/sessions' && req.method === 'GET') return json(res, 200, await sessions.list());
+        if (pathname === '/api/files' && req.method === 'GET') {
+          const r = files.list(url.searchParams.get('path') || '');
+          return r ? json(res, 200, r) : json(res, 404, { error: '没有这个文件夹' });
+        }
+        if (pathname === '/api/files' && req.method === 'DELETE') {
+          return files.remove(url.searchParams.get('path') || '') ? json(res, 200, { ok: true }) : json(res, 404, { error: '没有这个文件' });
+        }
+        if (pathname === '/api/files/download' && req.method === 'GET') {
+          const f = files.file(url.searchParams.get('path') || '');
+          if (!f) return json(res, 404, { error: '没有这个文件' });
+          res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': f.size, 'Content-Disposition': attachment(f.name), 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+          return fs.createReadStream(f.abs).pipe(res);
+        }
+        if (pathname === '/api/files/upload' && req.method === 'POST') {
+          if (Number(req.headers['content-length'] || 0) > MAX_UPLOAD) return json(res, 413, { error: `文件太大（最多 ${MAX_UPLOAD / 1024 / 1024}MB）` });
+          const r = await files.save(url.searchParams.get('dir') || '', url.searchParams.get('name') || '', req);
+          return r.error ? json(res, r.status, { error: r.error }) : json(res, 200, r);
+        }
         const sm = pathname.match(/^\/api\/sessions\/([\w-]+)(\/rename)?$/);
         if (sm) {
           const [, id, rename] = sm;

@@ -28,19 +28,32 @@ export const QUIET_ENV = {
  * 工具分三档：
  *   只读（看、找、搜文件）：直接放行；
  *   改文件（新建、修改）：每次先问用户；
- *   跑命令：每次先问用户，而且只在 SDK 自带沙箱里跑（服务器装了 bubblewrap 才开放）。
+ *   跑命令：每次先问用户，而且只在 SDK 自带沙箱里跑（服务器装了 bubblewrap 和 socat 才开放）。
  * 三档都先过路径守卫，只许在工作文件夹里。WebSearch 是 Anthropic 服务器端的搜索，接 DeepSeek 用不了，不放。
  */
 export const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'];
 export const WRITE_TOOLS = ['Write', 'Edit'];
 export const COMMAND_TOOLS = ['Bash'];
 
-/** 服务器能不能用沙箱（bubblewrap）：能才开放跑命令 */
+/** 服务器能不能用沙箱（bubblewrap + socat）：能才开放跑命令 */
 export function sandboxAvailable() {
+  return sandboxStatus() === 'ok';
+}
+
+/**
+ * 'ok' 能用；'missing' 没装齐；'blocked' 装了但起不来（多半是在 Docker 默认安全设置里）。
+ * SDK 的沙箱要 bubblewrap 和 socat 两样（实测：缺 socat 时每次对话都会报错，连不跑命令的聊天也做不了），
+ * 所以两样都在、bubblewrap 真能起来，才开放运行命令。
+ */
+export function sandboxStatus({ spawn = spawnSync } = {}) {
   try {
-    const r = spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-net', 'true'], { timeout: 5000, stdio: 'ignore' });
-    return r.status === 0;
-  } catch { return false; }
+    const socat = spawn('socat', ['-V'], { timeout: 5000, stdio: 'ignore' });
+    if (socat.error?.code === 'ENOENT') return 'missing';
+    // 和 SDK 真正用的一样要挂 /proc、隔离进程和网络：只试一半会误判（Docker 里 /proc 挂不上，命令全失败）
+    const r = spawn('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--unshare-pid', '--unshare-net', 'true'], { timeout: 5000, stdio: 'ignore' });
+    if (r.error?.code === 'ENOENT') return 'missing';
+    return r.status === 0 ? 'ok' : 'blocked';
+  } catch { return 'missing'; }
 }
 
 /**
@@ -148,6 +161,8 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         ...(cfg.commands && { sandbox: sandboxSettings(cfg) }),
         hooks: pathGuardHooks(workspace), // 路径只许在工作文件夹里（见 pathGuard.mjs）
         includePartialMessages: true,
+        // SDK 子进程的报错只记在服务器日志里（排查用），不发给网页
+        stderr: (d) => { const line = String(d).trim(); if (line && !/CLAUDE_SDK_CAN_USE_TOOL_SHADOWED|unrecognized_model/.test(line)) console.warn('[SDK]', line.slice(0, 500)); },
         maxTurns: 30,
         abortController,
         ...(sessionId && { resume: sessionId })
@@ -189,7 +204,9 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         // 用户点了停止：不管 SDK 最后报的是什么，都算“已停止”
         if (abortController.signal.aborted) { emit({ type: 'stopped', sessionId: current }); return; }
         if (m.subtype !== 'success' || m.is_error) {
-          const why = m.subtype === 'error_max_turns' ? '步骤太多，先停下了' : m.result || m.subtype;
+          const detail = Array.isArray(m.errors) && m.errors.length ? m.errors.join('；').slice(0, 300) : '';
+          if (detail) console.warn('[智能体出错]', detail);
+          const why = m.subtype === 'error_max_turns' ? '步骤太多，先停下了' : m.result || detail || m.subtype;
           emit({ type: 'error', error: `没有顺利完成：${why}`, sessionId: current });
           return;
         }

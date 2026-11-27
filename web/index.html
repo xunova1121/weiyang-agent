@@ -31,6 +31,7 @@
         <button id="toggle-side" type="button" class="ghost" aria-controls="side" aria-expanded="false">☰</button>
         <strong id="chat-title" class="chat-title">新对话</strong>
         <span id="status" class="status"></span>
+        <button id="open-files" type="button" class="ghost" aria-controls="files">📁 文件</button>
       </header>
       <section id="transcript" class="transcript" aria-live="polite"></section>
       <form id="composer" class="composer">
@@ -40,6 +41,18 @@
       </form>
     </main>
   </div>
+  <section id="files" class="files" hidden aria-label="工作文件夹">
+    <div class="files-panel">
+      <div class="files-head">
+        <strong>工作文件夹</strong>
+        <label class="upload">上传<input id="upload" type="file" multiple hidden></label>
+        <button id="close-files" type="button" class="ghost" aria-label="关闭">✕</button>
+      </div>
+      <nav id="crumbs" class="crumbs"></nav>
+      <ul id="file-list" class="file-list"></ul>
+      <p id="files-note" class="muted"></p>
+    </div>
+  </section>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

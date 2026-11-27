@@ -1,0 +1,23 @@
+# 未央 Agent 版：docker compose up -d --build
+# 先把 .env.example 复制成 .env，填好密码和 DeepSeek 密钥（.env 不进仓库）。
+services:
+  weiyang-agent:
+    build:
+      context: .
+      # 国内构建换镜像源（见 Dockerfile 开头的说明），例如：
+      # args:
+      #   APT_MIRROR: https://mirrors.aliyun.com/ubuntu
+      #   NPM_REGISTRY: https://registry.npmmirror.com
+    image: weiyang-agent
+    restart: unless-stopped
+    env_file: .env
+    # 只开在本机：前面用 Nginx / Caddy 加 HTTPS 再对外。要直接对外就改成 "8787:8787"（不推荐，密码会明文传）
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - ./data:/data
+    # 想开放“运行命令”（沙箱里跑）就去掉下面三行的注释。这会放宽 Docker 自己的两项限制，
+    # 命令仍在 bubblewrap 沙箱里：只能写工作文件夹、看不到配置和密钥、不能联网。不开也能正常聊天、读写文件。
+    # security_opt:
+    #   - seccomp=unconfined
+    #   - systempaths=unconfined

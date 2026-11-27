@@ -1,0 +1,18 @@
+# 每次推送跑一遍测试（不需要任何密钥：模型是测试用的假模型）
+name: 测试
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: 装沙箱工具（运行命令的测试要用；起不来时那项测试会跳过并说明原因）
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat
+      - run: npm ci
+      - run: npm test

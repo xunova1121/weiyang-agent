@@ -13,6 +13,7 @@ import { createTasks } from '../server/tasks.mjs';
 import { createHttpServer } from '../server/http.mjs';
 import { runAgent } from '../server/agentRunner.mjs';
 import { createSessions, useConfigDir } from '../server/sessions.mjs';
+import { createFiles } from '../server/files.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -27,7 +28,7 @@ fs.writeFileSync(path.join(dataDir, 'workspace', 'note.txt'), '浏览器里读�
 const cfg = { dataDir, password: 'web-password-1', apiKey: 'fake', baseUrl: model.url, model: 'deepseek-flash' };
 const extraEnv = { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
 useConfigDir(cfg);
-const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv }) }), cfg, sessions: createSessions(cfg) });
+const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv }) }), cfg, sessions: createSessions(cfg), files: createFiles(path.join(dataDir, 'workspace')) });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
@@ -81,6 +82,24 @@ try {
     await page.waitForFunction(() => document.querySelectorAll('.ask')[1]?.querySelector('.answered')?.textContent.includes('已拒绝'));
     await page.waitForSelector('#send:not([hidden])');
     check(`${label} 点拒绝后文件没写`, !fs.existsSync(path.join(dataDir, 'workspace', `${label}-no.txt`)));
+    // 文件面板：看到未央写的文件、下载、上传、删除
+    await page.click('#open-files');
+    await page.waitForSelector(`#file-list li[data-path="${file}"]`);
+    check(`${label} 文件面板里有未央刚写的文件`, true);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click(`#file-list li[data-path="${file}"] button.name`)]);
+    check(`${label} 点文件能下载，内容对`, fs.readFileSync(await dl.path(), 'utf8') === '网页里写的' && dl.suggestedFilename() === file);
+    await page.setInputFiles('#upload', { name: `${label}-上传.txt`, mimeType: 'text/plain', buffer: Buffer.from('我传上去的') });
+    await page.waitForSelector(`#file-list li[data-path="${label}-上传.txt"]`);
+    check(`${label} 上传的文件出现在列表里、存进了工作文件夹`, fs.readFileSync(path.join(dataDir, 'workspace', `${label}-上传.txt`), 'utf8') === '我传上去的');
+    await page.click(`#file-list li[data-path="${label}-上传.txt"] button.mini`);
+    await page.click(`#file-list li[data-path="${label}-上传.txt"] button.mini`);
+    await page.waitForFunction((p) => !document.querySelector(`#file-list li[data-path="${p}"]`), `${label}-上传.txt`);
+    check(`${label} 点两次删除，文件没了`, !fs.existsSync(path.join(dataDir, 'workspace', `${label}-上传.txt`)));
+    const panelOverflow = await page.evaluate(() => { const r = document.querySelector('.files-panel').getBoundingClientRect(); return r.left < 0 || r.right > innerWidth; });
+    check(`${label} 文件面板不超出屏幕`, !panelOverflow);
+    await page.screenshot({ path: path.join(out, `${label}-files.png`) });
+    await page.click('#close-files');
+    check(`${label} 文件面板能关上`, await page.isHidden('#files'));
     // 对话列表：手机上要先打开抽屉
     const openSide = async () => {
       if (label !== 'phone') return;

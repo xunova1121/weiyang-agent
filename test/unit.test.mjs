@@ -6,7 +6,7 @@ import path from 'node:path';
 import { checkConfig, loadConfig } from '../server/config.mjs';
 import { createAuth } from '../server/auth.mjs';
 import { checkToolPaths, insideWorkspace } from '../server/pathGuard.mjs';
-import { agentEnv, QUIET_ENV } from '../server/agentRunner.mjs';
+import { agentEnv, QUIET_ENV, sandboxStatus } from '../server/agentRunner.mjs';
 import { createTasks } from '../server/tasks.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'wa-'));
@@ -112,4 +112,12 @@ test('任务：发出“做完”事件后马上能发下一条，不用等 SDK 
   assert.equal(tasks.running, null, '“做完”之后不再占着');
   assert.ok(tasks.start({ text: 'b' }).task, '下一条能立刻开始');
   finishRun();
+});
+
+test('沙箱检查：缺 socat 或 bubblewrap 算“没装齐”；装了起不来算“被拦”；都好才开放运行命令', () => {
+  const fake = (have) => (cmd) => (have[cmd] === undefined ? { error: { code: 'ENOENT' } } : { status: have[cmd] });
+  assert.equal(sandboxStatus({ spawn: fake({ bwrap: 0 }) }), 'missing', '缺 socat');
+  assert.equal(sandboxStatus({ spawn: fake({ socat: 0 }) }), 'missing', '缺 bubblewrap');
+  assert.equal(sandboxStatus({ spawn: fake({ socat: 0, bwrap: 1 }) }), 'blocked');
+  assert.equal(sandboxStatus({ spawn: fake({ socat: 0, bwrap: 0 }) }), 'ok');
 });
