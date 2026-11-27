@@ -119,6 +119,15 @@ npm start            # 默认 http://0.0.0.0:8797
 - **🔊 朗读**：每条回复下面有“朗读”，再点一次停。
 - 真实 DeepSeek 的识图、语音还**没在这里测过**（测试用的是按原未央格式做的假服务，浏览器测试用了 Chromium 自带的假麦克风）。
 
+## Word、PPT、Excel、PDF
+
+用的是原未央的文档引擎（`server/docs/`，原样复制，来源见那里的说明），在服务器上生成：
+- `create_document`：模型把内容写成 Markdown，排版交给引擎（A4、标题样式、目录、表格底色、页码；PPT 按内容自动选卡片 / 大数字 / 时间线等版式；Excel“合计”自动写公式）。**生成文件先弹确认框**；默认存到工作文件夹的“文档”里，重名不覆盖；生成后读回内容写进回执。
+- `read_document`：读 Word、PPT、Excel（含公式清单）、文字版 PDF。
+- **PDF**：服务器装了 LibreOffice 时先排成 Word 再转 PDF（和 Word 版一样）；没装就做成 A4 可打印网页，并告诉你用浏览器“打印 → 另存为 PDF”。
+  想要真 PDF，在服务器上装 LibreOffice 和中文字体（OpenCloudOS / CentOS 大概是 `dnf install -y libreoffice-writer google-noto-sans-cjk-ttc-fonts`，包名以系统为准，**没在你的服务器上试过**），装好重启服务即可，不用改配置。
+- 还没做：原未央里的“按模板排版”“图片还原 Excel”“生成后让模型自查一轮”“PPT 配图”；Anthropic 的文档技能（改已有文件、复杂表格）作为补充，下一批接。
+
 ## 长期记忆
 
 - 你说“记住……”（或说了以后用得上的称呼、偏好），未央会用 `remember` 工具记下来，**每次先弹确认框**；`forget` 删一条也先问。
@@ -150,7 +159,7 @@ node test/server.smoke.mjs https://your.domain.com 你的密码   # 装好以后
 
 ## 目录
 
-- `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`memory.mjs` 长期记忆；`deepseekMedia.mjs` 识图和语音；`tools/` 给智能体的自定义工具（时间、联网搜索、记忆）；`http.mjs` 接口
+- `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`memory.mjs` 长期记忆；`deepseekMedia.mjs` 识图和语音；`officeRender.mjs` 转 PDF；`docs/` 原未央的文档引擎；`tools/` 给智能体的自定义工具（时间、联网搜索、记忆）；`http.mjs` 接口
 - `deploy/install.sh`：一条命令安装/升级（宝塔等）；`deploy/宝塔安装说明.md`；`deploy/weiyang-agent.service`：systemd 服务；`deploy/apparmor-bwrap`：Ubuntu 23.10+ 放行沙箱
 - `Dockerfile`、`docker-compose.yml`、`.env.example`：Docker 部署
 - `web/`：网页（不需要构建）

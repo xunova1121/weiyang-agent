@@ -96,6 +96,7 @@ export function systemAppend({ commands, memory = '' }) {
       ? '可以运行命令，但每次都要用户同意；命令在隔离环境里跑，不能联网，只能改工作文件夹。'
       : '这台服务器没有开放运行命令，需要时请告诉用户。',
     '用户上传的图片、PDF、表格在工作文件夹里：只要上面的文字用识别文字工具（read_image），要看懂图或就文件回答问题用 ask_file；用户提到“这张图”“我发的文件”时先用 Glob 找最近上传的文件。',
+    '要做 Word、PPT、Excel、PDF 文件时用 create_document（先把内容用 Markdown 写好，排版交给它），不要自己拼文件或写代码生成；读 Word、PPT、Excel、PDF 用 read_document。生成后按回执告诉用户文件路径，用户在“文件”里下载。',
     '用户说“记住……”或说了以后用得上的称呼、偏好时，用记忆工具记下来（会先问用户）；不要记密码、密钥、证件号。',
     ...(memory ? [memory] : [])
   ].join('\n');

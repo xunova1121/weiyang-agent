@@ -8,8 +8,9 @@ import * as basic from './basic.mjs';
 import * as search from './search.mjs';
 import * as memory from './memory.mjs';
 import * as vision from './vision.mjs';
+import * as documents from './documents.mjs';
 
-export const MODULES = [basic, search, memory, vision];
+export const MODULES = [basic, search, memory, vision, documents];
 
 export function createToolBox(cfg, { modules = MODULES, settings = null } = {}) {
   const workspace = path.join(cfg.dataDir, 'workspace');

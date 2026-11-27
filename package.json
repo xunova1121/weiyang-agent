@@ -13,6 +13,14 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.323",
+    "docx": "9.10.0",
+    "exceljs": "4.4.0",
+    "jszip": "3.10.2",
+    "mammoth": "1.13.0",
+    "marked": "18.0.14",
+    "pdfjs-dist": "4.10.38",
+    "pptxgenjs": "4.0.1",
+    "xlsx": "0.18.5",
     "zod": "4.6.7"
   },
   "private": true,

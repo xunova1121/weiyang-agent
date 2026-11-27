@@ -84,6 +84,7 @@ function describe(name, input = {}) {
   if (name === 'Write') return { what: '新建或覆盖文件', detail: `${input.file_path}\n\n${String(input.content ?? '').slice(0, 1500)}` };
   if (name === 'Edit') return { what: '修改文件', detail: `${input.file_path}\n\n把：${String(input.old_string ?? '').slice(0, 600)}\n改成：${String(input.new_string ?? '').slice(0, 600)}` };
   if (name === 'Bash') return { what: '运行命令（隔离环境，不能联网）', detail: `${input.description ? input.description + '\n' : ''}$ ${input.command}` };
+  if (name === 'mcp__weiyang__create_document') return { what: `生成 ${String(input.format || '').toUpperCase()} 文件`, detail: `${input.path ? '保存到（已有同名文件会被覆盖）：' + input.path : '保存到“文档”文件夹（重名不覆盖）'}\n标题：${input.title || '（按内容）'}\n\n${String(input.content ?? '').slice(0, 1500)}` };
   if (name === 'mcp__weiyang__remember') return { what: '记住这件事（以后每次对话都能看到）', detail: String(input.text ?? '') };
   if (name === 'mcp__weiyang__forget') return { what: '忘掉一条记忆', detail: `编号 ${input.id}` };
   return { what: `使用“${toolLabel(name)}”`, detail: JSON.stringify(input, null, 2) };
