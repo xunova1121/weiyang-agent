@@ -1,7 +1,7 @@
 # 未央 Agent 版 开发约定
 
 > **当前状态（2026-11-27）**：第一版三批 + 工具批全部推上 main：自定义工具底座、设置页多模型（含 OpenAI 格式翻译）、联网搜索（DeepSeek 联网 / 读网页 / 百度千帆）、长期记忆、识图和语音、Word/PPT/Excel/PDF（原未央文档引擎，`server/docs/` 原样复制，不在这里单独改）。已装到用户服务器（e.leing.top，本机 8797），每 30 分钟自动更新 stable：**推到 main 后 GitHub 测试全过才进 stable，推之前本地 npm test 必须全过**。
-> 未验收：真实千帆、DeepSeek 联网 / 识图 / 语音的效果；服务器上没装 LibreOffice 时 PDF 只出可打印网页。Anthropic 文档技能（`skills/weiyang-office/`）已在用户服务器启用（install-office.sh 在 OpenCloudOS 上跑通）。之后又加了：回复提速（默认不深度思考、去掉每段对话都变的开头标记）、模型列表拉取、跨对话记忆（对话摘要 + 翻旧对话）。称呼：原未央叫“未央1”，这个叫“未央2”（只是聊天里的叫法，网页不改名）。
+> 未验收：真实千帆、DeepSeek 联网 / 识图 / 语音的效果；服务器上没装 LibreOffice 时 PDF 只出可打印网页。Anthropic 文档技能（`skills/weiyang-office/`）已在用户服务器启用（install-office.sh 在 OpenCloudOS 上跑通）。之后又加了：回复提速（默认不深度思考、去掉每段对话都变的开头标记）、模型列表拉取、跨对话记忆（对话摘要 + 翻旧对话）。网页能装成应用（PWA）；安卓 App、Windows 程序在 `apps/`（只是连服务器的窗口，`.github/workflows/apps.yml` 打包发 Releases；安卓真机没验收、要 `ANDROID_SIGNING` 才能覆盖升级）。称呼：原未央叫“未央1”，这个叫“未央2”（只是聊天里的叫法，网页不改名）。
 
 和原来的未央（仓库 `xunova1121/-`）完全独立：账号、数据、代码都不共用，也不改动原未央。
 

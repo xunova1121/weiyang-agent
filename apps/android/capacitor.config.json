@@ -1,0 +1,19 @@
+{
+  "appId": "com.xunova.weiyang2",
+  "appName": "未央",
+  "webDir": "www",
+  "backgroundColor": "#f6f4ee",
+  "server": {
+    "url": "https://e.leing.top",
+    "errorPath": "offline.html"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": false
+    }
+  }
+}

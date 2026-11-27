@@ -147,7 +147,7 @@ function handle(ev) {
     case 'permission': askCard(ev); break;
     case 'permission_answered': answered(ev); break;
     case 'notice': status(ev.text); break;
-    case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; speakButton(current.bubble); return 'end';
+    case 'done': if (!current.bubble.textContent) current.bubble.textContent = ev.text || '（没有文字回复）'; speakButton(current.bubble); notifyDone(current.bubble.textContent); return 'end';
     case 'stopped': current.bubble.textContent += (current.bubble.textContent ? '\n' : '') + '（已停止）'; return 'end';
     case 'error': add('msg agent error', ev.error); return 'end';
   }
@@ -375,7 +375,17 @@ function fileRow(f) {
 async function download(f) {
   const res = await api('/api/files/download?path=' + encodeURIComponent(f.path)).catch(() => null);
   if (!res?.ok) { $('files-note').textContent = '下载失败'; return; }
-  const url = URL.createObjectURL(await res.blob());
+  const blob = await res.blob();
+  const cap = window.Capacitor?.Plugins?.WeiyangShell;
+  if (cap) {
+    // 安卓 App 里的网页没法直接下载：交给 App 存到手机的“下载/未央”里
+    $('files-note').textContent = `正在保存 ${f.name}…`;
+    const data = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1] || ''); r.readAsDataURL(blob); });
+    const saved = await cap.saveFile({ name: f.name, data, mime: blob.type || 'application/octet-stream' }).catch((e) => ({ error: e?.message || '保存失败' }));
+    $('files-note').textContent = saved?.path ? `已存到手机的 ${saved.path}` : saved?.error || '保存失败';
+    return;
+  }
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = f.name;
@@ -760,6 +770,51 @@ function speakButton(bubble) {
   return b;
 }
 
+/* ---------- 回复做完时提醒 ---------- */
+// Windows 程序、安卓 App 里交给壳（窗口在前面时壳自己不弹）；装成应用 / 浏览器里要用户在设置里允许通知，页面在后台时才弹
+const NOTIFY = 'weiyang-agent.notify';
+const shellNotify = () => window.weiyangShell?.notify ? (t, b) => window.weiyangShell.notify(t, b)
+  : window.Capacitor?.Plugins?.WeiyangShell ? (t, b) => window.Capacitor.Plugins.WeiyangShell.notify({ title: t, body: b }).catch(() => {}) : null;
+function notifyDone(text) {
+  const body = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 80) || '回复好了';
+  const viaShell = shellNotify();
+  if (viaShell) { viaShell('未央回复好了', body); return; } // 壳自己判断：窗口 / App 在前面时不弹
+  if (document.visibilityState === 'visible' || store.get(NOTIFY) !== '1' || !('Notification' in window) || Notification.permission !== 'granted') return;
+  navigator.serviceWorker?.ready.then((r) => r.showNotification('未央回复好了', { body, icon: '/icons/icon-192.png', tag: 'weiyang-reply' })).catch(() => {});
+}
+function initNotifyToggle() {
+  const box = $('notify-toggle');
+  // 在壳里由壳负责通知，不显示这个开关；浏览器不支持通知也不显示
+  if (shellNotify() || !('Notification' in window) || !window.isSecureContext) { box.closest('.notify-row').hidden = true; return; }
+  box.checked = store.get(NOTIFY) === '1' && Notification.permission === 'granted';
+  box.addEventListener('change', async () => {
+    if (!box.checked) { store.set(NOTIFY, null); $('notify-note').textContent = ''; return; }
+    const p = await Notification.requestPermission().catch(() => 'denied');
+    box.checked = p === 'granted';
+    store.set(NOTIFY, box.checked ? '1' : null);
+    $('notify-note').textContent = box.checked ? '' : '浏览器没允许通知：在浏览器的网站设置里把“通知”改成允许，再打开这个开关';
+  });
+}
+initNotifyToggle();
+
+/* ---------- 安卓 App：从别的 App“分享 → 未央” ---------- */
+let markReady;
+const ready = new Promise((r) => { markReady = r; }); // 登录好、进到聊天页
+const capShell = window.Capacitor?.Plugins?.WeiyangShell;
+if (capShell) {
+  capShell.addListener('shared', async (d) => {
+    await ready;
+    const files = (d.files || []).map((f) => new File([Uint8Array.from(atob(f.data), (c) => c.charCodeAt(0))], f.name || '分享的文件', { type: f.type || 'application/octet-stream' }));
+    if (files.length) await attach(files);
+    if (d.text) {
+      const p = $('prompt');
+      p.value = `${p.value}${p.value && !p.value.endsWith('\n') ? '\n' : ''}${d.text}`;
+      p.dispatchEvent(new Event('input'));
+    }
+    if (d.skipped) status(`有 ${d.skipped} 个文件太大（单个最多 20MB）或读不了，没传`);
+  });
+}
+
 /* ---------- 装成应用（PWA） ---------- */
 // 后台脚本只管网页本身，先问服务器要最新的（见 sw.js）；https 或本机才能用
 if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -792,6 +847,7 @@ $('install').addEventListener('click', async () => {
 
 async function enter() {
   show('chat');
+  markReady();
   loadModels();
   let st = null;
   try { const res = await api('/api/status'); if (res.ok) st = await res.json(); } catch { return; }

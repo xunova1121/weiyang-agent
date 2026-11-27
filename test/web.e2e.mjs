@@ -313,6 +313,47 @@ try {
     check('装成应用相关没有页面脚本错误', errors.length === 0);
     await ctx.close();
   }
+  // 安卓 App 里（用假的 WeiyangShell 插件代替手机）：分享进来的文件传上服务器、文字填进输入框；下载交给 App 存；回复好了交给 App 通知
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    await ctx.addInitScript(() => {
+      const calls = { notify: [], save: [], listeners: {} };
+      window.__shell = calls;
+      window.Capacitor = { Plugins: { WeiyangShell: {
+        addListener: (ev, fn) => { calls.listeners[ev] = fn; return Promise.resolve({ remove() {} }); },
+        notify: (o) => { calls.notify.push(o); return Promise.resolve({ shown: true }); },
+        saveFile: (o) => { calls.save.push(o); return Promise.resolve({ path: '下载/未央/' + o.name }); }
+      } } };
+    });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(base);
+    // 还没登录时就收到分享：先留着，登录后再传
+    // 不等它做完（它要等登录好才传），只把分享交给网页
+    await page.evaluate(() => { window.__shell.listeners.shared({ files: [{ name: '分享图.png', type: 'image/png', data: btoa('PNG-SHARED') }], text: '帮我看看这张图', skipped: 1 }); });
+    if (await page.isVisible('#login-form')) { await page.fill('#password', cfg.password); await page.click('#login-form button'); }
+    await page.waitForSelector('#chat:not([hidden])');
+    await page.waitForFunction(() => document.querySelector('#prompt').value.includes('（我上传了：上传/分享图.png）'));
+    check('安卓 App：分享进来的文件登录后传上服务器，路径写进输入框', fs.readFileSync(path.join(dataDir, 'workspace', '上传', '分享图.png'), 'utf8') === 'PNG-SHARED');
+    check('安卓 App：分享的文字填进输入框', (await page.inputValue('#prompt')).includes('帮我看看这张图'));
+    check('安卓 App：太大没传的文件有说明', (await page.textContent('#status')).includes('有 1 个文件太大'));
+    check('安卓 App 里不显示浏览器通知开关（由 App 负责）', await page.evaluate(() => document.querySelector('.notify-row').hidden));
+    await page.fill('#prompt', '在 App 里说句话');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__shell.notify.length > 0);
+    check('安卓 App：回复做完交给 App 通知（App 自己判断前后台）', await page.evaluate(() => window.__shell.notify[0].title === '未央回复好了' && window.__shell.notify[0].body.includes('收到：在 App 里说句话')));
+    fs.writeFileSync(path.join(dataDir, 'workspace', '给手机.txt'), '下载到手机的内容');
+    await page.click('#open-files');
+    await page.waitForSelector('#files:not([hidden])');
+    await page.click('#file-list li:has-text("给手机.txt") button.name');
+    await page.waitForFunction(() => window.__shell.save.length > 0);
+    const saved = await page.evaluate(() => window.__shell.save[0]);
+    check('安卓 App：下载交给 App 存，文件名和内容都对', saved.name === '给手机.txt' && Buffer.from(saved.data, 'base64').toString() === '下载到手机的内容');
+    check('安卓 App：告诉用户存到了哪里', (await page.textContent('#files-note')).includes('已存到手机的 下载/未央/给手机.txt'));
+    check('安卓 App 相关没有页面脚本错误', errors.length === 0);
+    await ctx.close();
+  }
   for (const [who, ua, want] of [
     ['苹果手机 Safari', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', '分享'],
     ['微信里', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36 MicroMessenger/8.0.50', '在浏览器打开']
