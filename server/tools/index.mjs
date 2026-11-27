@@ -5,8 +5,9 @@
 import path from 'node:path';
 import { buildToolServer, workspaceResolver } from './registry.mjs';
 import * as basic from './basic.mjs';
+import * as search from './search.mjs';
 
-export const MODULES = [basic];
+export const MODULES = [basic, search];
 
 export function createToolBox(cfg, { modules = MODULES, settings = null } = {}) {
   const workspace = path.join(cfg.dataDir, 'workspace');
