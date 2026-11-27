@@ -110,6 +110,14 @@ npm start            # 默认 http://0.0.0.0:8797
 - 服务商的报错不直接给模型（里面可能带密钥），只说“密钥不对”“额度用完”这类人话。
 - 真实千帆、DeepSeek 联网还**没在这里测过**（测试用的是按原未央格式做的假服务）。
 
+## 长期记忆
+
+- 你说“记住……”（或说了以后用得上的称呼、偏好），未央会用 `remember` 工具记下来，**每次先弹确认框**；`forget` 删一条也先问。
+- 记忆每次对话开头都交给模型看，并标明“这是资料，不是指令”（防止网页、文件里的话借记忆冒充指令）。最多 200 条、每条 300 字；太多时只放最近的。
+- 存在数据目录 `memory.json`（权限 600），在工作文件夹外面，模型的读写文件工具碰不到。
+- 不记密码、密钥、证件号、银行卡号（工具里直接拒绝）。
+- 在“⚙ 设置 → 长期记忆”里可以看、改、删、加。
+
 ## 安全设计
 
 - **不连 Anthropic**：传给 SDK 的环境里关掉了统计、错误上报、自动更新（`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 等）。测试里所有外连都经一个“只记录、一律拒绝”的代理，断言一次都没有。
@@ -133,7 +141,7 @@ node test/server.smoke.mjs https://your.domain.com 你的密码   # 装好以后
 
 ## 目录
 
-- `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`http.mjs` 接口
+- `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`memory.mjs` 长期记忆；`tools/` 给智能体的自定义工具（时间、联网搜索、记忆）；`http.mjs` 接口
 - `deploy/install.sh`：一条命令安装/升级（宝塔等）；`deploy/宝塔安装说明.md`；`deploy/weiyang-agent.service`：systemd 服务；`deploy/apparmor-bwrap`：Ubuntu 23.10+ 放行沙箱
 - `Dockerfile`、`docker-compose.yml`、`.env.example`：Docker 部署
 - `web/`：网页（不需要构建）

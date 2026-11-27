@@ -20,6 +20,7 @@
  *   DELETE /api/settings/providers/:id
  *   POST /api/settings/default        {model}
  *   POST /api/settings/services/:id   {key}（key 为 null 表示清除）
+ *   GET  /api/memory                  长期记忆；POST {text} 加一条；PUT /api/memory/:id {text} 改；DELETE /api/memory/:id 删
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
  */
@@ -88,7 +89,7 @@ function attachment(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-export function createHttpServer({ auth, tasks, cfg, sessions, files, settings = null }) {
+export function createHttpServer({ auth, tasks, cfg, sessions, files, settings = null, memory = null }) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     const { pathname } = url;
@@ -109,6 +110,14 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files, settings =
           return json(res, 200, { ok: true, model: settings ? settings.defaultModel() : cfg.model, commands: Boolean(cfg.commands), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
         }
         if (pathname === '/api/sessions' && req.method === 'GET') return json(res, 200, await sessions.list());
+        if (memory && (pathname === '/api/memory' || pathname.startsWith('/api/memory/'))) {
+          if (pathname === '/api/memory' && req.method === 'GET') return json(res, 200, { items: memory.list() });
+          if (pathname === '/api/memory' && req.method === 'POST') { const r = memory.add((await readJson(req)).text); return r.error ? json(res, 400, r) : json(res, 200, r); }
+          const mm = pathname.match(/^\/api\/memory\/([0-9a-f]{8})$/);
+          if (mm && req.method === 'PUT') { const r = memory.update(mm[1], (await readJson(req)).text); return r.error ? json(res, r.error === '没有这条记忆' ? 404 : 400, r) : json(res, 200, r); }
+          if (mm && req.method === 'DELETE') return memory.remove(mm[1]) ? json(res, 200, { ok: true }) : json(res, 404, { error: '没有这条记忆' });
+          return json(res, 404, { error: '没有这个接口' });
+        }
         if (settings && pathname.startsWith('/api/settings') || settings && pathname === '/api/models') {
           if (pathname === '/api/models' && req.method === 'GET') return json(res, 200, { models: settings.models().map(({ ref, provider, model }) => ({ ref, provider, model })), default: settings.defaultModel() });
           if (pathname === '/api/settings' && req.method === 'GET') return json(res, 200, settings.publicView());

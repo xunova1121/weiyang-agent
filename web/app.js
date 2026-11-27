@@ -84,6 +84,8 @@ function describe(name, input = {}) {
   if (name === 'Write') return { what: '新建或覆盖文件', detail: `${input.file_path}\n\n${String(input.content ?? '').slice(0, 1500)}` };
   if (name === 'Edit') return { what: '修改文件', detail: `${input.file_path}\n\n把：${String(input.old_string ?? '').slice(0, 600)}\n改成：${String(input.new_string ?? '').slice(0, 600)}` };
   if (name === 'Bash') return { what: '运行命令（隔离环境，不能联网）', detail: `${input.description ? input.description + '\n' : ''}$ ${input.command}` };
+  if (name === 'mcp__weiyang__remember') return { what: '记住这件事（以后每次对话都能看到）', detail: String(input.text ?? '') };
+  if (name === 'mcp__weiyang__forget') return { what: '忘掉一条记忆', detail: `编号 ${input.id}` };
   return { what: `使用“${toolLabel(name)}”`, detail: JSON.stringify(input, null, 2) };
 }
 const DECISION_TEXT = { allow: '已允许', always: '已允许（本次对话都允许）', deny: '已拒绝', timeout: '太久没回答，已按拒绝处理' };
@@ -406,7 +408,47 @@ async function loadModels() {
 }
 
 let presets = [];
+async function loadMemory() {
+  const res = await api('/api/memory').catch(() => null);
+  if (!res?.ok) return;
+  const { items } = await res.json();
+  $('memories').replaceChildren(...(items.length ? items : [null]).map((it) => {
+    const li = document.createElement('li');
+    if (!it) { li.className = 'muted'; li.textContent = '还没有记忆'; return li; }
+    const box = document.createElement('div');
+    box.className = 'svc';
+    const row = document.createElement('div');
+    row.className = 'row';
+    const input = document.createElement('input');
+    input.value = it.text; input.maxLength = 300; input.setAttribute('aria-label', '记忆内容');
+    const save = document.createElement('button');
+    save.type = 'button'; save.textContent = '改'; save.className = 'ghost';
+    save.addEventListener('click', async () => {
+      const r = await api(`/api/memory/${it.id}`, { method: 'PUT', body: { text: input.value } }).catch(() => null);
+      $('memory-error').textContent = r?.ok ? '' : ((await r?.json().catch(() => null))?.error || '没改成功');
+      loadMemory();
+    });
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'mini'; del.textContent = '🗑'; del.title = '删除'; del.setAttribute('aria-label', '删除这条记忆');
+    del.addEventListener('click', async () => { await api(`/api/memory/${it.id}`, { method: 'DELETE' }).catch(() => null); loadMemory(); });
+    row.append(input, save, del);
+    box.append(row);
+    li.append(box);
+    return li;
+  }));
+}
+
+$('memory-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('memory-new').value.trim();
+  if (!text) return;
+  const r = await api('/api/memory', { method: 'POST', body: { text } }).catch(() => null);
+  if (r?.ok) { $('memory-new').value = ''; $('memory-error').textContent = ''; } else $('memory-error').textContent = (await r?.json().catch(() => null))?.error || '没加上';
+  loadMemory();
+});
+
 async function loadSettings() {
+  loadMemory();
   const res = await api('/api/settings').catch(() => null);
   if (!res?.ok) return;
   const st = await res.json();

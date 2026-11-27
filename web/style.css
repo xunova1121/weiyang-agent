@@ -100,3 +100,4 @@ button.danger { background: var(--danger); color: #fff; }
 .file-list li.prov { display: grid; grid-template-columns: 1fr auto auto; align-items: center; column-gap: 4px; }
 .file-list li.prov > .name { grid-column: 1 / -1; overflow-wrap: anywhere; }
 .file-list li.prov > .meta { white-space: normal; overflow-wrap: anywhere; }
+#providers, #services, #memories { flex: none; min-height: 0; overflow: visible; } /* 设置里的短列表：不要文件列表那样留 120px 空白 */

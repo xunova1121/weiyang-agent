@@ -15,6 +15,7 @@ import { runAgent } from '../server/agentRunner.mjs';
 import { createSessions, useConfigDir } from '../server/sessions.mjs';
 import { createFiles } from '../server/files.mjs';
 import { createSettings } from '../server/settings.mjs';
+import { createMemory } from '../server/memory.mjs';
 import { startOpenAIBridge } from '../server/openaiBridge.mjs';
 import { startFakeOpenAI } from './fakeOpenAI.mjs';
 
@@ -34,7 +35,7 @@ useConfigDir(cfg);
 const settings = createSettings(cfg);
 const bridge = await startOpenAIBridge({ getProvider: (id) => settings.provider(id) });
 const oai = await startFakeOpenAI();
-const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv, settings, bridge }) }), cfg, settings, sessions: createSessions(cfg), files: createFiles(path.join(dataDir, 'workspace')) });
+const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv, settings, bridge }) }), cfg, settings, memory: createMemory(dataDir), sessions: createSessions(cfg), files: createFiles(path.join(dataDir, 'workspace')) });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
@@ -186,6 +187,18 @@ try {
       await page.waitForFunction((n) => document.querySelector('#providers').textContent.includes(n), name);
     }
     check(`${label} 服务商加上了，页面上只看得到密钥尾号`, (await page.textContent('#providers')).includes('尾号 -key') && !(await page.content()).includes('sk-openai-test-key'));
+    const note = `${label}：回答简短点`;
+    await page.fill('#memory-new', note);
+    await page.click('#memory-form button[type=submit]');
+    await page.waitForFunction((n) => [...document.querySelectorAll('#memories input')].some((i) => i.value === n), note);
+    check(`${label} 长期记忆能加上`, true);
+    const memRow = page.locator('#memories li').filter({ has: page.locator('input') }).last();
+    check(`${label} 新加的记忆在列表最后`, (await memRow.locator('input').inputValue()) === note);
+    await memRow.locator('button[aria-label="删除这条记忆"]').click();
+    await page.waitForFunction((n) => ![...document.querySelectorAll('#memories input')].some((i) => i.value === n), note);
+    check(`${label} 长期记忆能删掉`, true);
+    const gaps = await page.evaluate(() => ['#providers', '#services', '#memories'].map((q) => { const ul = document.querySelector(q); const items = [...ul.children].reduce((h, li) => h + li.getBoundingClientRect().height, 0); return ul.getBoundingClientRect().height - items; }));
+    check(`${label} 设置里的列表不留空白、不被截断`, gaps.every((g) => Math.abs(g) < 8));
     const panelOverflow = await page.evaluate(() => { const r = document.querySelector('#settings .files-panel').getBoundingClientRect(); return r.left < 0 || r.right > innerWidth; });
     check(`${label} 设置面板不超出屏幕`, !panelOverflow);
     await page.screenshot({ path: path.join(out, `${label}-settings.png`) });

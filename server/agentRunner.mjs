@@ -16,6 +16,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { pathGuardHooks } from './pathGuard.mjs';
 import { configDir } from './sessions.mjs';
 import { createToolBox } from './tools/index.mjs';
+import { createMemory } from './memory.mjs';
 
 /** 关掉统计、错误上报、自动更新等非必要外连（spike 实测：不关会连 api.anthropic.com，关了一次都不连） */
 export const QUIET_ENV = {
@@ -84,7 +85,7 @@ export function sandboxSettings(cfg) {
   };
 }
 
-export function systemAppend({ commands }) {
+export function systemAppend({ commands, memory = '' }) {
   return [
     '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
     '用户在中国大陆，时间按北京时间。',
@@ -93,7 +94,9 @@ export function systemAppend({ commands }) {
     '你只能在当前工作文件夹里读写文件。新建或修改文件前，用户会看到确认框，拒绝了就不要换个办法硬做。',
     commands
       ? '可以运行命令，但每次都要用户同意；命令在隔离环境里跑，不能联网，只能改工作文件夹。'
-      : '这台服务器没有开放运行命令，需要时请告诉用户。'
+      : '这台服务器没有开放运行命令，需要时请告诉用户。',
+    '用户说“记住……”或说了以后用得上的称呼、偏好时，用记忆工具记下来（会先问用户）；不要记密码、密钥、证件号。',
+    ...(memory ? [memory] : [])
   ].join('\n');
 }
 
@@ -194,7 +197,7 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
         env: agentEnv({ ...cfg, ...conn }, { home, extra: extraEnv }),
         model: conn.model,
         settingSources: [], // 不读服务器上任何 ~/.claude 或项目里的设置、规则
-        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands) }) },
+        systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands), memory: createMemory(cfg.dataDir).promptBlock() }) },
         tools,
         // 不用 allowedTools 免确认：每次调用都先过路径守卫钩子，再由下面的 canUseTool 决定
         permissionMode: 'default',
