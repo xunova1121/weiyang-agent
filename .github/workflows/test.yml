@@ -13,7 +13,7 @@ jobs:
           node-version: 22
           cache: npm
       - name: 装沙箱工具（运行命令的测试要用；起不来时那项测试会跳过并说明原因）
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap socat
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*.list /etc/apt/sources.list.d/microsoft*.sources && sudo apt-get update && sudo apt-get install -y bubblewrap socat
       # Ubuntu 24.04 默认拦着沙箱：装上仓库里的 AppArmor 规则，顺便验证这条规则在真机上管用
       - name: 放行沙箱（AppArmor 规则）
         run: |
