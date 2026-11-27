@@ -3,7 +3,9 @@
  * 写文件（create_document）先问用户；读文件（read_document）直接放行。都只碰工作文件夹。
  * PDF：服务器装了 LibreOffice 时先做成 Word 再转 PDF；没装时做成 A4 可打印网页，并说清楚。
  */
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { generate, parseFile } from '../docs/agent/docs.js';
@@ -11,8 +13,24 @@ import { THEME_IDS, REPORT_THEME_IDS, TEMPLATE_THEME_IDS, themeList } from '../d
 import { ALL_STYLE_IDS } from '../docs/agent/pptStyles.js';
 import { SHEET_STYLE_IDS } from '../docs/agent/spreadsheetDesign.js';
 import { officeTypography } from '../docs/agent/officeTypography.js';
-import { toPdf } from '../officeRender.mjs';
+import { officeAvailable, toPdf } from '../officeRender.mjs';
 import { userError } from './registry.mjs';
+import { SKILLS_DIR } from '../officeSkills.mjs';
+
+/** 在服务器上（沙箱外）跑技能自带的 Excel 重算脚本：只给 PATH 和临时 HOME，超时就杀掉 */
+function runRecalc(abs) {
+  return new Promise((resolve, reject) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'weiyang-recalc-'));
+    const child = spawn('python3', [path.join(SKILLS_DIR, 'xlsx', 'scripts', 'recalc.py'), abs, '90'], { cwd: home, env: { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8' }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    let out = '', err = '';
+    child.stdout.on('data', (b) => { if (out.length < 200_000) out += b; });
+    child.stderr.on('data', (b) => { if (err.length < 4000) err += b; });
+    const done = (fn) => { clearTimeout(timer); fs.rmSync(home, { recursive: true, force: true }); fn(); };
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } done(() => reject(new Error('重算超时'))); }, 150_000);
+    child.once('error', (e) => done(() => reject(e)));
+    child.once('close', () => done(() => { try { resolve(JSON.parse(out)); } catch { reject(new Error(`重算脚本没给出结果：${err.slice(-300)}`)); } }));
+  });
+}
 
 export const FORMATS = ['docx', 'pptx', 'xlsx', 'pdf', 'html', 'md', 'txt', 'csv'];
 const READABLE = /\.(docx?|wps|pptx|xlsx?|ods|pdf|html?|md|txt|csv|json)$/i;
@@ -129,6 +147,50 @@ export function tools(ctx) {
         ].filter(Boolean).join('\n\n');
       }
     },
+    {
+      name: 'convert_to_pdf',
+      description: '把工作文件夹里已有的 Word（docx）、PPT（pptx）、Excel（xlsx）转成 PDF，存在原文件旁边（同名 .pdf，重名加序号）。服务器上直接用 LibreOffice 转，不要自己在命令里跑 soffice。',
+      schema: { path: z.string().describe('要转的文件，工作文件夹里的相对路径') },
+      risk: 'write',
+      run: async ({ path: rel }) => {
+        const ext = String(rel).match(/\.(docx|pptx|xlsx)$/i)?.[1]?.toLowerCase();
+        if (!ext) throw userError('只能转 .docx、.pptx、.xlsx（老的 .doc 先另存为 .docx）');
+        const abs = ctx.resolve(rel);
+        let st;
+        try { st = fs.statSync(abs); } catch { throw userError(`工作文件夹里没有“${rel}”`); }
+        if (!st.isFile()) throw userError(`“${rel}”不是文件`);
+        if (st.size > MAX_READ) throw userError('文件太大（最多 32MB）');
+        if (!(await officeAvailable())) throw userError('服务器没装 LibreOffice，转不了 PDF（装法：bash deploy/install-office.sh）');
+        let pdf;
+        try { pdf = await toPdf(fs.readFileSync(abs), ext); } catch (e) { console.warn('[转 PDF]', e.message); throw userError('转换失败了（文件可能损坏或加了密码）'); }
+        const stem = rel.replace(/\.[a-z]+$/i, '');
+        let out = `${stem}.pdf`;
+        for (let i = 2; fs.existsSync(ctx.resolve(out)); i++) out = `${stem}(${i}).pdf`;
+        fs.writeFileSync(ctx.resolve(out), pdf);
+        let pages = '';
+        try { pages = (await parseFile(new Blob([pdf]), out, { limit: 300 })).text; } catch { /* 读回只是附带 */ }
+        const n = (pages.match(/--- 第 \d+ 页 ---/g) || []).length;
+        return `已转好：${out}（${sizeText(pdf.length)}${n ? `，读回 ${n} 页` : ''}）。用户可以在“文件”里下载。`;
+      }
+    },
+    ...(ctx.cfg?.officeSkills ? [{
+      name: 'recalc_excel',
+      description: '用 LibreOffice 重算工作文件夹里 Excel（xlsx）的全部公式，并检查有没有 #REF!、#DIV/0! 这类错误（xlsx 技能里的 recalc.py，在服务器上直接跑，不要自己在命令里跑）。用 openpyxl 写过公式后必须调用；有错误就改了再重算。',
+      schema: { path: z.string().describe('工作文件夹里的 .xlsx 路径') },
+      risk: 'write',
+      run: async ({ path: rel }) => {
+        if (!/\.xlsx$/i.test(rel)) throw userError('只能重算 .xlsx');
+        const abs = ctx.resolve(rel);
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw userError(`工作文件夹里没有“${rel}”`);
+        let r;
+        try { r = await runRecalc(abs); } catch (e) { console.warn('[重算]', e.message); throw userError('重算没成功（服务器的 LibreOffice 或 Python 出错了），请如实告诉用户'); }
+        if (r.error) throw userError(`没有重算：${String(r.error).slice(0, 200)}`);
+        const errs = Object.entries(r.error_summary || {}).map(([k, v]) => `${k} ${v.count ?? ''} 处${v.locations ? '：' + v.locations.slice(0, 10).join('、') : ''}`);
+        return r.status === 'success'
+          ? `已重算：${rel}，${r.total_formulas ?? 0} 个公式，没有错误。`
+          : `已重算：${rel}，有 ${r.total_errors} 处公式错误——${errs.join('；')}。改好后再重算一次。`;
+      }
+    }] : []),
     {
       name: 'read_document',
       description: '读取工作文件夹里 Word（docx，含被改成 .doc 后缀的）、PPT（pptx）、Excel（xlsx / xls，含公式清单）、PDF（文字版）、网页、文本文件的文字内容。扫描版 PDF、图片用 read_image。',

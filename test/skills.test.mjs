@@ -119,6 +119,9 @@ test('开了技能：模型看得到 Skill 工具和三个技能，系统提示�
   const all = JSON.stringify(req);
   for (const s of ['docx', 'pptx', 'xlsx']) assert.ok(all.includes(`weiyang-office:${s}`), `技能清单里有 ${s}`);
   assert.match(JSON.stringify(req.system), /文档分工：新建 Word/);
+  assert.match(JSON.stringify(req.system), /不要跑 soffice[\s\S]*convert_to_pdf[\s\S]*recalc_excel/, '告诉模型沙箱里别跑 LibreOffice，用服务器上的工具');
+  assert.match(JSON.stringify(req.system), /连续失败两次就停下/);
+  assert.ok(req.tools.some((t) => t.name === 'mcp__weiyang__recalc_excel'), '开了技能才有 Excel 重算工具');
   assert.equal(proxy.attempts.length, 0, '没有往外连');
 });
 

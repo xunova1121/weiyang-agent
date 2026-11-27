@@ -92,15 +92,15 @@ export function systemAppend({ commands, officeSkills = false, memory = '' }) {
   return [
     '你是“未央”，用户的个人助手。用中文回答，说人话，少用术语。',
     '用户在中国大陆，时间按北京时间。',
-    '没做过、没核实过的事不要说成已完成；工具失败或被用户拒绝要如实说明。',
+    '没做过、没核实过的事不要说成已完成；工具失败或被用户拒绝要如实说明。同一件事连续失败两次就停下，告诉用户卡在哪里、你建议怎么办，不要换着法子一直硬试（每条命令用户都要点确认）。',
     '问到最新消息、新闻、价格、天气等时效内容时，先用联网搜索工具查（有百度搜索用百度，也可以用 DeepSeek 联网；用户给了网址就读网页），回答里带上来源链接；需要今天日期时调用当前时间工具。没查到就说没查到，不要编。',
     '你只能在当前工作文件夹里读写文件。新建或修改文件前，用户会看到确认框，拒绝了就不要换个办法硬做。',
     commands
       ? '可以运行命令，但每次都要用户同意；命令在隔离环境里跑，不能联网，只能改工作文件夹。'
       : '这台服务器没有开放运行命令，需要时请告诉用户。',
     '用户上传的图片、PDF、表格在工作文件夹里：只要上面的文字用识别文字工具（read_image），要看懂图或就文件回答问题用 ask_file；用户提到“这张图”“我发的文件”时先用 Glob 找最近上传的文件。',
-    '要做 Word、PPT、Excel、PDF 文件时用 create_document（先把内容用 Markdown 写好，排版交给它），不要自己拼文件或写代码生成；读 Word、PPT、Excel、PDF 用 read_document。生成后按回执告诉用户文件路径，用户在“文件”里下载。',
-    ...(officeSkills ? ['文档分工：新建 Word / PPT / Excel / PDF 一律用 create_document（中文排版、公文、汇报 PPT 都做好了）；只有改用户已有的文件（保留原格式改字、修订痕迹、批注、按用户给的模板填写、往已有 PPT 加删页）、复杂 Excel 公式和重算、create_document 做不到的要求，才用 docx / pptx / xlsx 技能（Skill 工具）。技能里的命令一律写 python3（不是 python），脚本用技能目录的绝对路径，输出文件放工作文件夹里；用技能新建文件时也不要 npm install（不能联网）。'] : []),
+    '要做 Word、PPT、Excel、PDF 文件时用 create_document（先把内容用 Markdown 写好，排版交给它），不要自己拼文件或写代码生成；读 Word、PPT、Excel、PDF 用 read_document；已有的 Word / PPT / Excel 转 PDF 用 convert_to_pdf，不要在命令里自己跑 soffice。生成后按回执告诉用户文件路径，用户在“文件”里下载。',
+    ...(officeSkills ? ['文档分工：新建 Word / PPT / Excel / PDF 一律用 create_document（中文排版、公文、汇报 PPT 都做好了）；只有改用户已有的文件（保留原格式改字、修订痕迹、批注、按用户给的模板填写、往已有 PPT 加删页）、复杂 Excel 公式和重算、create_document 做不到的要求，才用 docx / pptx / xlsx 技能（Skill 工具）。技能里的命令一律写 python3（不是 python），脚本用技能目录的绝对路径，输出文件放工作文件夹里；用技能新建文件时也不要 npm install（不能联网）。沙箱里的命令不要跑 soffice / LibreOffice（起不来）：转 PDF 用 convert_to_pdf，Excel 重算用 recalc_excel，要看排版效果就先 convert_to_pdf 再 read_document。'] : []),
     '用户说“记住……”或说了以后用得上的称呼、偏好时，用记忆工具记下来（会先问用户）；不要记密码、密钥、证件号。',
     ...(memory ? [memory] : [])
   ].join('\n');
@@ -170,6 +170,22 @@ function resultSummary(content) {
 }
 
 /**
+ * “本次对话都允许”：记在这段对话上，同一段对话里同一类操作（同一个工具，比如跑命令、改文件）以后都不再问；
+ * 开新对话重新问。只记在内存里，服务重启后清空。SDK 自带的“记住这条”只按单条命令匹配，命令一换又要问，用户点得很累。
+ */
+const sessionGrants = new Map(); // sessionId → Set<工具名>
+const MAX_GRANT_SESSIONS = 500;
+export function grantedTools(sessionId) { return [...(sessionGrants.get(sessionId) ?? [])]; }
+function grant(sessionId, name) {
+  if (!sessionId) return;
+  const set = sessionGrants.get(sessionId) ?? new Set();
+  set.add(name);
+  sessionGrants.delete(sessionId);
+  sessionGrants.set(sessionId, set); // 最近用过的排最后
+  while (sessionGrants.size > MAX_GRANT_SESSIONS) sessionGrants.delete(sessionGrants.keys().next().value);
+}
+
+/**
  * @param {object} cfg  loadConfig() 的结果（commands：是否开放跑命令）
  * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, ask: (req: object) => Promise<'allow'|'always'|'deny'>,
  *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function, toolModules?: Array }} o
@@ -191,6 +207,7 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
   let current = sessionId;
   let announced = false;
   let fatalReason = null; // 不可重试的模型错误，停下时报这个而不是“已停止”
+  const pending = new Set(); // 还不知道对话编号时（几乎不会）先记在这一轮
   // 文档技能要跑命令：沙箱开放、库也装齐（main.mjs 里检查过）才启用
   const skillsOn = Boolean(cfg.commands && cfg.officeSkills);
   const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : []), ...(skillsOn ? ['Skill'] : [])];
@@ -215,8 +232,13 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
           // Skill 只是把技能说明读进来，真干活的命令另外要确认
           if (READ_ONLY_TOOLS.includes(name) || custom === 'read' || (skillsOn && name === 'Skill')) return { behavior: 'allow' };
           if ((!tools.includes(name) && custom !== 'write') || !ask) return { behavior: 'deny', message: `没有开放“${name}”这个工具` };
+          const turnGrants = (current && sessionGrants.get(current)) || pending;
+          if (turnGrants.has(name)) return { behavior: 'allow' };
           const decision = await ask({ name, input: forDisplay(input, workspace), signal: toolSignal });
-          if (decision === 'always') return { behavior: 'allow', updatedPermissions: suggestions ?? [] };
+          if (decision === 'always') {
+            if (current) grant(current, name); else pending.add(name);
+            return { behavior: 'allow', updatedPermissions: suggestions ?? [] };
+          }
           if (decision === 'allow') return { behavior: 'allow' };
           return { behavior: 'deny', message: decision === 'timeout' ? '用户太久没回应，这一步没做' : '用户拒绝了这一步' };
         },
@@ -236,6 +258,7 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
       if (m.session_id && (m.session_id !== current || !announced)) {
         current = m.session_id;
         announced = true;
+        for (const n of pending) grant(current, n);
         emit({ type: 'session', sessionId: current });
       }
       if (m.type === 'system' && m.subtype === 'api_retry') {

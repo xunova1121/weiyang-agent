@@ -144,6 +144,24 @@ test('要求沙箱的环境里（GitHub 自动测试装了 AppArmor 规则）沙
   assert.equal(SANDBOX, 'ok', SKIP_WHY);
 });
 
+test('“本次对话都允许”：同一段对话里同一类操作都不再问（换个文件名、换条命令也不问）；只点“允许”的不算；开新对话重新问', async () => {
+  const first = await ask('写文件 grant-1.txt 一', { decide: () => 'allow' });
+  const again = await ask('写文件 grant-2.txt 二', { sessionId: first.sessionId, decide: () => 'always' });
+  assert.ok(again.evs.some((e) => e.type === 'permission'), '只点过“允许”的，下次照样问');
+  const third = await ask('写文件 grant-3.txt 三', { sessionId: first.sessionId, decide: () => 'deny' });
+  assert.ok(!third.evs.some((e) => e.type === 'permission'), '点过“本次对话都允许”后，换个文件也不再问');
+  assert.equal(fs.readFileSync(path.join(ws, 'grant-3.txt'), 'utf8'), '三');
+  const other = await ask('写文件 grant-4.txt 四', { decide: () => 'deny' });
+  assert.ok(other.evs.some((e) => e.type === 'permission'), '新对话重新问');
+  assert.ok(!fs.existsSync(path.join(ws, 'grant-4.txt')));
+  if (!HAS_SANDBOX) return;
+  const cmd1 = await ask('跑命令 echo a > grant-a.txt', { sessionId: first.sessionId, decide: () => 'always' });
+  assert.ok(cmd1.evs.some((e) => e.type === 'permission' && e.name === 'Bash'), '跑命令是另一类，第一次照样问');
+  const cmd2 = await ask('跑命令 echo b > grant-b.txt', { sessionId: first.sessionId, decide: () => 'deny' });
+  assert.ok(!cmd2.evs.some((e) => e.type === 'permission'), '换了一条命令也不再问');
+  assert.equal(fs.readFileSync(path.join(ws, 'grant-b.txt'), 'utf8').trim(), 'b');
+});
+
 test('全程没有往外连', () => {
   assert.deepEqual(proxy.attempts, [], '外连尝试：' + proxy.attempts.join(', '));
 });

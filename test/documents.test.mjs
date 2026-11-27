@@ -116,6 +116,36 @@ test('PDF：装了 LibreOffice 就是真 PDF；没装（或转换失败）做成
   assert.match(r, /读回的开头：[\s\S]*主要成绩/, 'PDF 读回有文字（中文字体正常）');
 });
 
+test('转 PDF：已有的 Word / PPT 在服务器上直接转，存在旁边不覆盖；不支持的格式、越界路径说人话', async (t) => {
+  const ws = freshWorkspace();
+  const tool = toolsIn(ws);
+  await tool.create_document({ format: 'docx', content: REPORT, path: '总结.docx' });
+  await assert.rejects(tool.convert_to_pdf({ path: '总结.txt' }), /只能转 \.docx/);
+  await assert.rejects(tool.convert_to_pdf({ path: '../x.docx' }), /只能访问工作文件夹里的文件/);
+  await assert.rejects(tool.convert_to_pdf({ path: '没有.docx' }), /工作文件夹里没有/);
+  if (!(await officeAvailable())) return t.skip('这台机器没装 LibreOffice');
+  const r = await tool.convert_to_pdf({ path: '总结.docx' });
+  assert.match(r, /已转好：总结\.pdf（\d+KB，读回 \d+ 页）/);
+  assert.equal(fs.readFileSync(path.join(ws, '总结.pdf')).subarray(0, 5).toString(), '%PDF-');
+  assert.match(await tool.convert_to_pdf({ path: '总结.docx' }), /已转好：总结\(2\)\.pdf/, '重名不覆盖');
+});
+
+test('Excel 重算（服务器上直接跑，不进沙箱）：算出结果；公式错误会列出位置；没开技能时不提供', async (t) => {
+  const ws = freshWorkspace();
+  assert.ok(!tools({ cfg: {}, workspace: ws, resolve: workspaceResolver(ws) }).some((x) => x.name === 'recalc_excel'), '没开技能不提供');
+  const { officeSkillsStatus } = await import('../server/officeSkills.mjs');
+  if (officeSkillsStatus().status !== 'ok' || !(await officeAvailable())) return t.skip('本机缺 Python 库或 LibreOffice');
+  const tool = Object.fromEntries(tools({ cfg: { officeSkills: true }, workspace: ws, resolve: workspaceResolver(ws) }).map((x) => [x.name, x.run]));
+  const { spawnSync } = await import('node:child_process');
+  spawnSync('python3', ['-c', "import openpyxl\nwb=openpyxl.Workbook();s=wb.active\ns['A1']=2;s['A2']=3;s['A3']='=SUM(A1:A2)'\nwb.save('好.xlsx')\nwb2=openpyxl.Workbook();t=wb2.active\nt['A1']=1;t['A2']='=A1/0'\nwb2.save('坏.xlsx')"], { cwd: ws });
+  assert.match(await tool.recalc_excel({ path: '好.xlsx' }), /已重算：好\.xlsx，1 个公式，没有错误/);
+  const check = spawnSync('python3', ['-c', "import openpyxl;print(openpyxl.load_workbook('好.xlsx',data_only=True).active['A3'].value)"], { cwd: ws, encoding: 'utf8' });
+  assert.equal(check.stdout.trim(), '5', '公式真的算出了结果');
+  assert.match(await tool.recalc_excel({ path: '坏.xlsx' }), /有 1 处公式错误——#DIV\/0! 1 处：.*A2/);
+  await assert.rejects(tool.recalc_excel({ path: '../x.xlsx' }), /只能访问工作文件夹里的文件/);
+  await assert.rejects(tool.recalc_excel({ path: '好.csv' }), /只能重算 \.xlsx/);
+});
+
 test('路径只许在工作文件夹里；网上的图片不下载；读不支持的格式说人话', async () => {
   const ws = freshWorkspace();
   const t = toolsIn(ws);
