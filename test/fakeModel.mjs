@@ -49,6 +49,9 @@ export function startFakeModel() {
       blocks = [{ type: 'text', text: `工具${last.toolResult.is_error ? '失败' : '成功'}：${flat(last.toolResult.content).slice(0, 200)}` }];
     } else if (/读文件 (\S+)/.test(last.text)) {
       blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name: 'Read', input: { file_path: last.text.match(/读文件 (\S+)/)[1] } }];
+    } else if (/调用工具 (\S+) (\{.*\})/.test(last.text)) {
+      const [, name, json] = last.text.match(/调用工具 (\S+) (\{.*\})/);
+      blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name, input: JSON.parse(json) }];
     } else if (/写文件 (\S+) (.+)/.test(last.text)) {
       const [, file_path, content] = last.text.match(/写文件 (\S+) (.+)/);
       blocks = [{ type: 'tool_use', id: 'toolu_' + requests.length, name: 'Write', input: { file_path, content } }];

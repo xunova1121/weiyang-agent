@@ -15,6 +15,7 @@ import path from 'node:path';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { pathGuardHooks } from './pathGuard.mjs';
 import { configDir } from './sessions.mjs';
+import { createToolBox } from './tools/index.mjs';
 
 /** 关掉统计、错误上报、自动更新等非必要外连（spike 实测：不关会连 api.anthropic.com，关了一次都不连） */
 export const QUIET_ENV = {
@@ -137,9 +138,9 @@ function resultSummary(content) {
 /**
  * @param {object} cfg  loadConfig() 的结果（commands：是否开放跑命令）
  * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, ask: (req: object) => Promise<'allow'|'always'|'deny'>,
- *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function }} o
+ *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function, toolModules?: Array }} o
  */
-export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal, extraEnv, queryImpl = query }) {
+export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal, extraEnv, queryImpl = query, toolModules }) {
   const workspace = path.join(cfg.dataDir, 'workspace');
   const home = path.dirname(configDir(cfg)); // SDK 的对话记录存在这里（.claude/projects）
   fs.mkdirSync(workspace, { recursive: true });
@@ -153,6 +154,8 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
   let current = sessionId;
   let announced = false;
   const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : [])];
+  // 自定义工具（联网搜索、记忆、文档……）：每轮新建一份，见 tools/
+  const toolBox = createToolBox(cfg, toolModules ? { modules: toolModules } : undefined);
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
   try {
     const q = queryImpl({
@@ -166,9 +169,11 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         tools,
         // 不用 allowedTools 免确认：每次调用都先过路径守卫钩子，再由下面的 canUseTool 决定
         permissionMode: 'default',
+        mcpServers: { weiyang: toolBox.server },
         canUseTool: async (name, input, { signal: toolSignal, suggestions }) => {
-          if (READ_ONLY_TOOLS.includes(name)) return { behavior: 'allow' };
-          if (!tools.includes(name) || !ask) return { behavior: 'deny', message: `没有开放“${name}”这个工具` };
+          const custom = toolBox.riskOf(name);
+          if (READ_ONLY_TOOLS.includes(name) || custom === 'read') return { behavior: 'allow' };
+          if ((!tools.includes(name) && custom !== 'write') || !ask) return { behavior: 'deny', message: `没有开放“${name}”这个工具` };
           const decision = await ask({ name, input: forDisplay(input, workspace), signal: toolSignal });
           if (decision === 'always') return { behavior: 'allow', updatedPermissions: suggestions ?? [] };
           if (decision === 'allow') return { behavior: 'allow' };

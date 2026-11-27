@@ -73,7 +73,10 @@ test('发消息：同一连接先回任务编号，再逐段推回复；模型�
   assert.equal(req.auth, 'Bearer fake-key-not-real');
   assert.equal(req.body.model, 'deepseek-flash');
   // DeferredToolPlaceholder 是 SDK 自带的内部占位项（工具延迟加载用），不是能读写的工具
-  const toolNames = (req.body.tools || []).map((t) => t.name).filter((n) => n !== 'DeferredToolPlaceholder').sort();
+  const allNames = (req.body.tools || []).map((t) => t.name).filter((n) => n !== 'DeferredToolPlaceholder');
+  // 自定义工具（mcp__weiyang__…）另外核对；内置工具仍然必须正好是这几样
+  const toolNames = allNames.filter((n) => !n.startsWith('mcp__')).sort();
+  assert.deepEqual(allNames.filter((n) => n.startsWith('mcp__')).sort(), ['mcp__weiyang__current_time'], '自定义工具正好是登记过的这些');
   // 第二批起：只读 + 改文件（改文件每次要确认）；没开放跑命令时不给 Bash
   assert.deepEqual(toolNames, ['Edit', 'Glob', 'Grep', 'Read', 'Write'], '没开放跑命令时只给读写文件的工具');
   // 接着上一轮

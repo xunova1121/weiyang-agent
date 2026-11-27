@@ -49,12 +49,14 @@ function add(cls, text = '', before = null) {
 }
 
 /* ---------- 工具卡与确认框 ---------- */
+/** 自定义工具在模型那边叫 mcp__weiyang__xxx，给人看时去掉前缀 */
+const toolLabel = (name) => String(name || '').replace(/^mcp__weiyang__/, '');
 function toolCard(t, before = null) {
   const box = document.createElement('details');
   box.className = 'tool' + (t.ok === false ? ' failed' : '');
   box.dataset.id = t.id;
   const s = document.createElement('summary');
-  s.textContent = `🔧 ${t.name}`;
+  s.textContent = `🔧 ${toolLabel(t.name)}`;
   const pre = document.createElement('pre');
   pre.textContent = JSON.stringify(t.input ?? {}, null, 2);
   box.append(s, pre);
@@ -81,7 +83,7 @@ function describe(name, input = {}) {
   if (name === 'Write') return { what: '新建或覆盖文件', detail: `${input.file_path}\n\n${String(input.content ?? '').slice(0, 1500)}` };
   if (name === 'Edit') return { what: '修改文件', detail: `${input.file_path}\n\n把：${String(input.old_string ?? '').slice(0, 600)}\n改成：${String(input.new_string ?? '').slice(0, 600)}` };
   if (name === 'Bash') return { what: '运行命令（隔离环境，不能联网）', detail: `${input.description ? input.description + '\n' : ''}$ ${input.command}` };
-  return { what: `使用工具 ${name}`, detail: JSON.stringify(input, null, 2) };
+  return { what: `使用“${toolLabel(name)}”`, detail: JSON.stringify(input, null, 2) };
 }
 const DECISION_TEXT = { allow: '已允许', always: '已允许（本次对话都允许）', deny: '已拒绝', timeout: '太久没回答，已按拒绝处理' };
 
