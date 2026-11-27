@@ -42,8 +42,8 @@ COPY web ./web
 
 # 镜像自带的普通用户 ubuntu（uid 1000）运行，不用 root
 RUN mkdir -p /data && chown ubuntu:ubuntu /data
-ENV DATA_DIR=/data HOST=0.0.0.0 PORT=8787 NODE_ENV=production
+ENV DATA_DIR=/data HOST=0.0.0.0 PORT=8797 NODE_ENV=production
 VOLUME /data
 USER ubuntu
-EXPOSE 8787
+EXPOSE 8797
 CMD ["node", "server/main.mjs"]

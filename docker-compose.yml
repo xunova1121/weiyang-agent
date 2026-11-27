@@ -11,9 +11,9 @@ services:
     image: weiyang-agent
     restart: unless-stopped
     env_file: .env
-    # 只开在本机：前面用 Nginx / Caddy 加 HTTPS 再对外。要直接对外就改成 "8787:8787"（不推荐，密码会明文传）
+    # 只开在本机：前面用 Nginx / Caddy 加 HTTPS 再对外。要直接对外就改成 "8797:8797"（不推荐，密码会明文传）
     ports:
-      - "127.0.0.1:8787:8787"
+      - "127.0.0.1:8797:8797"
     volumes:
       - ./data:/data
     # 想开放“运行命令”（沙箱里跑）就去掉下面三行的注释。这会放宽 Docker 自己的两项限制，

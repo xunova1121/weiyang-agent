@@ -6,7 +6,16 @@
 > 看/找/搜文件直接做，**新建/修改文件和运行命令每次都先弹确认框**，运行命令只在沙箱里；工作文件夹可以在网页上浏览、下载、上传、删除；Docker 部署。
 > 还没验收：接真实 DeepSeek 的效果、在你自己的服务器上安装。
 
-## 部署方式一：Docker（推荐）
+## 部署方式零：宝塔面板 / 一条命令安装
+
+用宝塔面板的服务器（OpenCloudOS、CentOS、Ubuntu）看 [deploy/宝塔安装说明.md](deploy/宝塔安装说明.md)。核心就两条：
+
+```bash
+cd /opt && git clone https://github.com/xunova1121/weiyang-agent.git
+bash /opt/weiyang-agent/deploy/install.sh     # 会问登录密码和 DeepSeek 密钥（不显示），装成系统服务，只开在本机 8797
+```
+
+## 部署方式一：Docker
 
 ```bash
 git clone https://github.com/xunova1121/weiyang-agent.git && cd weiyang-agent
@@ -16,7 +25,7 @@ docker compose logs -f    # 看到“未央 Agent 版已启动”就好了
 ```
 
 - 数据在 `./data`（配置、对话记录、工作文件夹），升级镜像不会丢。
-- 默认只开在本机 8787 端口，前面加 HTTPS 再对外（见下面“加 HTTPS”）。
+- 默认只开在本机 8797 端口，前面加 HTTPS 再对外（见下面“加 HTTPS”）。
 - **运行命令**在 Docker 里默认不开放（Docker 自己的安全设置会挡住沙箱，启动日志会说明）。要开放，在 `docker-compose.yml` 里去掉 `security_opt` 那三行的注释：`seccomp=unconfined`、`systempaths=unconfined`。这会放宽 Docker 自己的两项限制，命令仍在沙箱里：只能写工作文件夹、看不到配置和密钥、不能联网（实测过）。
 - **国内构建**：Docker Hub、Ubuntu 和 npm 官方源可能很慢或连不上，按 `Dockerfile` 开头的说明换镜像源（`NODE_IMAGE`、`BASE_IMAGE`、`APT_MIRROR`、`NPM_REGISTRY`）。
 
@@ -39,7 +48,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now weiyang-agent
 journalctl -u weiyang-agent -f
 ```
 
-这种方式只开在本机 127.0.0.1:8787，同样要在前面加 HTTPS。**和原来的未央装在同一台服务器上时**：端口、目录、用户都不一样（8787、`/opt/weiyang-agent`、`weiyang`），不会碰原未央的 `/opt/jarvis`。
+这种方式只开在本机 127.0.0.1:8797，同样要在前面加 HTTPS。**和原来的未央装在同一台服务器上时**：端口、目录、用户都不一样（原未央 8787、`/opt/jarvis`、`jarvis`；这里 8797、`/opt/weiyang-agent`、`weiyang`），互不影响。
 
 ## 加 HTTPS
 
@@ -47,7 +56,7 @@ journalctl -u weiyang-agent -f
 
 ```
 your.domain.com {
-    reverse_proxy 127.0.0.1:8787 {
+    reverse_proxy 127.0.0.1:8797 {
         flush_interval -1    # 回复要边生成边推，不能攒着
     }
 }
@@ -61,20 +70,13 @@ your.domain.com {
 npm ci
 export WEIYANG_PASSWORD='至少8位的登录密码'
 export DEEPSEEK_API_KEY='你的 DeepSeek 密钥'
-npm start            # 默认 http://0.0.0.0:8787
-```
-
-```bash
-npm ci
-export WEIYANG_PASSWORD='至少8位的登录密码'
-export DEEPSEEK_API_KEY='你的 DeepSeek 密钥'
-npm start            # 默认 http://0.0.0.0:8787
+npm start            # 默认 http://0.0.0.0:8797
 ```
 
 也可以把配置写进 `data/config.json`（`data/` 不进仓库）：
 
 ```json
-{ "password": "至少8位", "apiKey": "DeepSeek 密钥", "model": "deepseek-flash", "port": 8787 }
+{ "password": "至少8位", "apiKey": "DeepSeek 密钥", "model": "deepseek-flash", "port": 8797 }
 ```
 
 | 变量 | 默认 | 说明 |
@@ -83,7 +85,7 @@ npm start            # 默认 http://0.0.0.0:8787
 | `DEEPSEEK_API_KEY` | 无（必填） | 也可用 `MODEL_API_KEY` |
 | `MODEL_BASE_URL` | `https://api.deepseek.com/anthropic` | Anthropic 格式的接口地址，不要以 `/v1` 结尾 |
 | `MODEL` | `deepseek-flash` | 型号名以 DeepSeek 文档为准 |
-| `PORT` / `HOST` | `8787` / `0.0.0.0` | |
+| `PORT` / `HOST` | `8797` / `0.0.0.0` | 原未央用 8787，这里默认 8797，两个可以装在同一台服务器上 |
 | `DATA_DIR` | `./data` | 登录令牌、对话记录、工作文件夹都在这里 |
 | `ALLOW_COMMANDS` | `auto` | `auto`：沙箱能用就开放运行命令；`off`：不开放 |
 
@@ -111,7 +113,8 @@ node test/server.smoke.mjs https://your.domain.com 你的密码   # 装好以后
 ## 目录
 
 - `server/`：`main.mjs` 启动；`config.mjs` 配置；`auth.mjs` 登录；`tasks.mjs` 任务、按序号续接、确认框；`agentRunner.mjs` 调用 SDK、沙箱设置；`pathGuard.mjs` 路径守卫；`sessions.mjs` 对话列表；`files.mjs` 工作文件夹的文件；`http.mjs` 接口
-- `Dockerfile`、`docker-compose.yml`、`.env.example`：Docker 部署；`deploy/weiyang-agent.service`：不用 Docker 时的 systemd 服务
+- `deploy/install.sh`：一条命令安装/升级（宝塔等）；`deploy/宝塔安装说明.md`；`deploy/weiyang-agent.service`：systemd 服务；`deploy/apparmor-bwrap`：Ubuntu 23.10+ 放行沙箱
+- `Dockerfile`、`docker-compose.yml`、`.env.example`：Docker 部署
 - `web/`：网页（不需要构建）
 - `test/`：测试，`fakeModel.mjs` 是假模型和记录外连的代理
 - `spike/`：接入前的实验脚本

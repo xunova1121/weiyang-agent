@@ -14,6 +14,7 @@
  *   GET  /api/files/download?path=    下载
  *   POST /api/files/upload?dir=&name= 上传（请求体就是文件内容，最多 20MB；重名自动加序号）
  *   DELETE /api/files?path=
+ *   GET  /api/health                  不用登录，只回 {ok:true}
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
  */
@@ -92,6 +93,8 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files }) {
         const r = auth.login(req.socket.remoteAddress || '', body.password);
         return r.ok ? json(res, 200, { token: r.token }) : json(res, r.status, { error: r.error });
       }
+      // 健康检查（安装脚本、监控用）：不用登录，只说活着没有，不透露任何配置
+      if (pathname === '/api/health' && req.method === 'GET') return json(res, 200, { ok: true, service: 'weiyang-agent' });
       if (pathname.startsWith('/api/')) {
         const token = bearer(req);
         if (!auth.check(token)) return json(res, 401, { error: '登录已失效，请重新登录' });

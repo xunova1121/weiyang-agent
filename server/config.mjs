@@ -3,7 +3,7 @@
  *
  * 必填：WEIYANG_PASSWORD（至少 8 位）、DEEPSEEK_API_KEY（或 MODEL_API_KEY）。
  * 选填：MODEL_BASE_URL（默认 DeepSeek 的 Anthropic 兼容接口）、MODEL（默认 deepseek-flash）、
- *       PORT（默认 8787）、HOST（默认 0.0.0.0）、DATA_DIR（默认 ./data）、ALLOW_COMMANDS（auto / off）。
+ *       PORT（默认 8797）、HOST（默认 0.0.0.0）、DATA_DIR（默认 ./data）、ALLOW_COMMANDS（auto / off）。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import path from 'node:path';
 export const DEFAULTS = {
   baseUrl: 'https://api.deepseek.com/anthropic',
   model: 'deepseek-flash',
-  port: 8787,
+  port: 8797, // 原未央占着 8787，两个版本可以装在同一台服务器上
   host: '0.0.0.0'
 };
 

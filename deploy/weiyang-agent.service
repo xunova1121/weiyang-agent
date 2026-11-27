@@ -1,4 +1,4 @@
-# 不用 Docker 时的 systemd 服务（Ubuntu / Debian）。用法见 README“直接装在服务器上”。
+# 不用 Docker 时的 systemd 服务。一般不用手动装：deploy/install.sh 会按本机的 node 路径和端口生成。
 [Unit]
 Description=未央 Agent 版
 After=network-online.target
@@ -7,9 +7,9 @@ Wants=network-online.target
 [Service]
 User=weiyang
 WorkingDirectory=/opt/weiyang-agent
-# 密码和密钥写在这个文件里（权限 600，只有 root 和 weiyang 能读）
+# 密码和密钥写在这个文件里（权限 600，只有 root 能读；systemd 读出来交给程序）。这里的 PORT 会盖过下面 Environment 里的
 EnvironmentFile=/etc/weiyang-agent.env
-Environment=DATA_DIR=/var/lib/weiyang-agent HOST=127.0.0.1 PORT=8787 NODE_ENV=production
+Environment=DATA_DIR=/var/lib/weiyang-agent HOST=127.0.0.1 PORT=8797 NODE_ENV=production
 ExecStart=/usr/bin/node server/main.mjs
 Restart=on-failure
 RestartSec=5

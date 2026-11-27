@@ -105,6 +105,12 @@ export function agentEnv(cfg, { home, extra = {} } = {}) {
     ANTHROPIC_BASE_URL: cfg.baseUrl,
     ANTHROPIC_AUTH_TOKEN: cfg.apiKey,
     ANTHROPIC_MODEL: cfg.model,
+    // SDK 做起标题、子任务这些后台活时会按“小模型/大模型”另选型号；全部指到同一个 DeepSeek 型号，免得发去它不认识的 Claude 型号名
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: cfg.model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: cfg.model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: cfg.model,
+    ANTHROPIC_SMALL_FAST_MODEL: cfg.model,
+    CLAUDE_CODE_SUBAGENT_MODEL: cfg.model,
     ...QUIET_ENV,
     ...extra
   };

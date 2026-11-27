@@ -17,6 +17,7 @@ test('配置：密码太短、缺密钥、地址以 /v1 结尾都拒绝启动', 
   assert.throws(() => loadConfig({ DATA_DIR: tmp() }), /配置不完整/);
   const ok = loadConfig({ DATA_DIR: tmp(), WEIYANG_PASSWORD: '12345678', DEEPSEEK_API_KEY: 'k' });
   assert.equal(ok.baseUrl, 'https://api.deepseek.com/anthropic');
+  assert.equal(ok.port, 8797, '默认不用 8787（原未央占着）');
 });
 
 test('登录：错密码 401，连错 5 次锁定；令牌能用、退出后失效；文件里不存令牌原文', () => {

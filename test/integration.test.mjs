@@ -118,6 +118,19 @@ test('断线续接：从中途的序号接着收，只补后面的事件', async
   assert.fail('任务没有完成');
 });
 
+test('发给模型的每个请求都用配置的型号（包括 SDK 的后台小任务），不会发去 DeepSeek 不认识的 Claude 型号', () => {
+  const models = [...new Set(model.requests.filter((r) => r.url.startsWith('/v1/messages')).map((r) => r.body.model))];
+  assert.deepEqual(models, ['deepseek-flash']);
+});
+
+test('健康检查不用登录，也不透露型号、地址等配置', async () => {
+  const r = await fetch(base + '/api/health');
+  assert.equal(r.status, 200);
+  const text = await r.text();
+  assert.deepEqual(JSON.parse(text), { ok: true, service: 'weiyang-agent' });
+  assert.doesNotMatch(text, /deepseek|127\.0\.0\.1|fake-key/);
+});
+
 test('全程没有往外连（关掉了统计、上报、自动更新）', () => {
   assert.deepEqual(proxy.attempts, [], '外连尝试：' + proxy.attempts.join(', '));
 });
