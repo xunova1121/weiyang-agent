@@ -198,7 +198,7 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files, settings =
           const sessionId = typeof body.sessionId === 'string' && /^[\w-]{1,80}$/.test(body.sessionId) ? body.sessionId : null;
           // 选的模型（provider/model）；不认识的就用默认模型，由 settings.resolve 兜底
           const model = typeof body.model === 'string' && body.model.length <= 160 ? body.model : null;
-          const r = tasks.start({ text, sessionId, model });
+          const r = tasks.start({ text, sessionId, model, think: body.think === true });
           if (r.error) return json(res, r.status, { error: r.error });
           if (/text\/event-stream/.test(String(req.headers.accept || ''))) return streamTask(req, res, tasks, r.task.id, 0, { type: 'task_created', id: r.task.id });
           return json(res, 200, r.task);

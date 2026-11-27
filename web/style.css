@@ -91,6 +91,9 @@ button.danger { background: var(--danger); color: #fff; }
 .file-list button.mini { background: transparent; color: var(--muted); padding: 4px 6px; font-size: 13px; }
 
 .model-bar { display: flex; align-items: center; gap: 8px; padding: 6px 16px 0; font-size: 13px; color: var(--muted); }
+.model-bar > label[for=model] { white-space: nowrap; flex: none; }
+.model-bar select { flex: 0 1 auto; min-width: 0; }
+.model-bar .think { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }
 .model-bar select, .settings-panel select { font: inherit; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); max-width: 100%; min-width: 0; }
 .settings-panel { overflow-y: auto; }
 .settings-panel h3 { margin: 10px 0 2px; font-size: 15px; }

@@ -11,6 +11,7 @@ const store = {
 const TOKEN = 'weiyang-agent.token';
 const SESSION = 'weiyang-agent.session';
 const MODEL = 'weiyang-agent.model';
+const THINK = 'weiyang-agent.think';
 const IDLE_MS = 45_000;
 const RETRY_MS = [1000, 2000, 4000, 8000, 8000];
 
@@ -222,7 +223,7 @@ async function run(start) {
 function send(text) {
   add('msg user', text);
   return run(async () => {
-    const res = await api('/api/tasks', { method: 'POST', body: { text, sessionId, model: $('model').value || null }, headers: { Accept: 'text/event-stream' }, signal: current.ctrl.signal });
+    const res = await api('/api/tasks', { method: 'POST', body: { text, sessionId, model: $('model').value || null, think: $('think').checked }, headers: { Accept: 'text/event-stream' }, signal: current.ctrl.signal });
     if (!res.ok) { add('msg agent error', (await res.json().catch(() => ({}))).error || `服务器返回 ${res.status}`); return; }
     await follow(await readStream(res, current.ctrl));
   });
@@ -550,6 +551,9 @@ $('default-model').addEventListener('change', async () => {
   await api('/api/settings/default', { method: 'POST', body: { model: $('default-model').value } }).catch(() => null);
 });
 $('model').addEventListener('change', () => store.set(MODEL, $('model').value));
+// 深度思考：默认关（快），选择记在这台设备上
+$('think').checked = store.get(THINK) === '1';
+$('think').addEventListener('change', () => store.set(THINK, $('think').checked ? '1' : null));
 $('open-settings').addEventListener('click', () => { closeSide(); $('settings').hidden = false; loadSettings(); loadModels(); });
 $('close-settings').addEventListener('click', () => { $('settings').hidden = true; });
 $('settings').addEventListener('click', (e) => { if (e.target === $('settings')) $('settings').hidden = true; });

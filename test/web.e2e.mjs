@@ -247,6 +247,18 @@ try {
     check(`${label} 识别后麦克风回到待命`, !(await page.isVisible('#mic.recording')));
     check(`${label} 输入框跟着内容长高，第一行没被挤出去`, await page.evaluate(() => { const p = document.querySelector('#prompt'); return p.scrollTop === 0 && p.scrollHeight <= p.clientHeight + 2; }));
     await page.screenshot({ path: path.join(out, `${label}-composer.png`) });
+    check(`${label} “深度思考”默认关`, !(await page.isChecked('#think')));
+    check(`${label} 模型一栏的字不被挤成竖排`, await page.evaluate(() => { const l = document.querySelector('.model-bar > label[for=model]'); return l.getBoundingClientRect().height < 24; }));
+    await page.check('#think');
+    await page.fill('#prompt', '你好');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('.msg.agent + .speak:not([hidden])');
+    const thinkReq = model.requests.filter((r) => r.url.startsWith('/v1/messages')).at(-1).body;
+    check(`${label} 打开“深度思考”后，发给模型的请求真的带上思考`, thinkReq.thinking?.type === 'adaptive');
+    await page.reload();
+    await page.waitForSelector('#chat:not([hidden])');
+    check(`${label} 刷新后还记得“深度思考”的选择`, await page.isChecked('#think'));
+    await page.uncheck('#think');
     await page.fill('#prompt', '你好');
     await page.keyboard.press('Enter');
     await page.waitForSelector('.msg.agent + .speak:not([hidden])');

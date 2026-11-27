@@ -24,7 +24,9 @@ export const QUIET_ENV = {
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
   DISABLE_TELEMETRY: '1',
   DISABLE_ERROR_REPORTING: '1',
-  DISABLE_AUTOUPDATER: '1'
+  DISABLE_AUTOUPDATER: '1',
+  // SDK 默认在系统提示最前面加一行按对话变化的标记，每段新对话都会让模型那边的“重复开头缓存”失效（约 1.2 万 token 要重读）
+  CLAUDE_CODE_ATTRIBUTION_HEADER: '0'
 };
 
 /**
@@ -190,7 +192,7 @@ function grant(sessionId, name) {
  * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, ask: (req: object) => Promise<'allow'|'always'|'deny'>,
  *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function, toolModules?: Array }} o
  */
-export async function runAgent(cfg, { text, sessionId = null, model = null, emit, ask, signal, extraEnv, queryImpl = query, toolModules, settings = null, bridge = null }) {
+export async function runAgent(cfg, { text, sessionId = null, model = null, think = false, emit, ask, signal, extraEnv, queryImpl = query, toolModules, settings = null, bridge = null }) {
   // 这一轮用哪个模型：网页上选的（provider/model），没选或不认识就用默认的；没有设置（测试里）就用服务器配置
   const conn = connectionFor(cfg, { settings, bridge, model });
   const workspace = path.join(cfg.dataDir, 'workspace');
@@ -221,6 +223,9 @@ export async function runAgent(cfg, { text, sessionId = null, model = null, emit
         cwd: workspace,
         env: agentEnv({ ...cfg, ...conn }, { home, extra: extraEnv }),
         model: conn.model,
+        // 深度思考默认关：SDK 默认让模型“自适应思考、强度高”，DeepSeek 会先想一阵再答，每步工具调用也要想，慢很多。网页上可以打开
+        // （关掉时 SDK 不发 thinking 字段，按 Anthropic 接口的规矩就是不思考；思考强度也降到最低）
+        ...(think ? { thinking: { type: 'adaptive' }, effort: 'high' } : { thinking: { type: 'disabled' }, effort: 'low' }),
         settingSources: [], // 不读服务器上任何 ~/.claude 或项目里的设置、规则
         systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands), officeSkills: skillsOn, memory: createMemory(cfg.dataDir).promptBlock() }) },
         tools,
