@@ -156,6 +156,14 @@ test('模型接口出错时不会悄悄卡住：网页收到“正在重试”�
   assert.match(buf, /"type":"stopped"/);
 });
 
+test('密钥不对：马上停下并说清楚，不重试几分钟（用户在服务器上遇到过“一直卡着”）', async () => {
+  const t0 = Date.now();
+  const r = await ask('密钥错测试');
+  assert.ok(Date.now() - t0 < 30_000, `用了 ${Math.round((Date.now() - t0) / 1000)} 秒`);
+  assert.equal(r.end.type, 'error');
+  assert.match(r.end.error, /密钥不对（401）/);
+});
+
 test('全程没有往外连（关掉了统计、上报、自动更新）', () => {
   assert.deepEqual(proxy.attempts, [], '外连尝试：' + proxy.attempts.join(', '));
 });

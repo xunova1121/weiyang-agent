@@ -14,6 +14,9 @@ import { createHttpServer } from '../server/http.mjs';
 import { runAgent } from '../server/agentRunner.mjs';
 import { createSessions, useConfigDir } from '../server/sessions.mjs';
 import { createFiles } from '../server/files.mjs';
+import { createSettings } from '../server/settings.mjs';
+import { startOpenAIBridge } from '../server/openaiBridge.mjs';
+import { startFakeOpenAI } from './fakeOpenAI.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -28,7 +31,10 @@ fs.writeFileSync(path.join(dataDir, 'workspace', 'note.txt'), '浏览器里读�
 const cfg = { dataDir, password: 'web-password-1', apiKey: 'fake', baseUrl: model.url, model: 'deepseek-flash' };
 const extraEnv = { HTTPS_PROXY: proxy.url, HTTP_PROXY: proxy.url, NO_PROXY: '127.0.0.1,localhost', no_proxy: '127.0.0.1,localhost' };
 useConfigDir(cfg);
-const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv }) }), cfg, sessions: createSessions(cfg), files: createFiles(path.join(dataDir, 'workspace')) });
+const settings = createSettings(cfg);
+const bridge = await startOpenAIBridge({ getProvider: (id) => settings.provider(id) });
+const oai = await startFakeOpenAI();
+const server = createHttpServer({ auth: createAuth({ password: cfg.password, dataDir }), tasks: createTasks({ run: (o) => runAgent(cfg, { ...o, extraEnv, settings, bridge }) }), cfg, settings, sessions: createSessions(cfg), files: createFiles(path.join(dataDir, 'workspace')) });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
 const browser = await chromium.launch();
@@ -153,6 +159,54 @@ try {
     check('刷新后接上时提问只显示一次', (await page.$$eval('.msg.user', (ns) => ns.filter((n) => n.textContent.includes('after-reload.txt')).length)) === 1);
     await page.close();
   }
+  // 设置：加一个 OpenAI 格式的服务商，选它的模型聊天；密钥不出现在页面上
+  for (const [label, viewport] of [['desktop', { width: 1280, height: 800 }], ['phone', { width: 390, height: 844 }]]) {
+    const page = await browser.newPage({ viewport });
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto(base);
+    if (await page.isVisible('#login-form')) { await page.fill('#password', cfg.password); await page.click('#login-form button'); }
+    await page.waitForSelector('#chat:not([hidden])');
+    await page.waitForFunction(() => document.querySelector('#model').options.length >= 1);
+    check(`${label} 模型选择里有服务器配置的 DeepSeek`, (await page.textContent('#model')).includes('deepseek-flash'));
+    if (label === 'phone') { await page.click('#toggle-side'); await page.waitForFunction(() => Math.round(document.querySelector('#side').getBoundingClientRect().left) === 0); }
+    await page.click('#open-settings');
+    await page.waitForSelector('#settings:not([hidden]) #providers li');
+    const name = `${label}测试服务商`;
+    if (!(await page.textContent('#providers')).includes(name)) {
+      await page.click('#provider-form-box summary');
+      await page.selectOption('#pf-preset', 'openai');
+      check(`${label} 选常用服务商自动填好格式和地址`, (await page.inputValue('#pf-format')) === 'openai' && (await page.inputValue('#pf-url')).startsWith('https://'));
+      check(`${label} 未核实的预设地址有提示`, (await page.textContent('#pf-hint')).includes('官方文档'));
+      await page.fill('#pf-name', name);
+      await page.fill('#pf-url', oai.url);
+      await page.fill('#pf-key', 'sk-openai-test-key');
+      await page.fill('#pf-models', `gpt-${label}`);
+      await page.click('#provider-form button[type=submit]');
+      await page.waitForFunction((n) => document.querySelector('#providers').textContent.includes(n), name);
+    }
+    check(`${label} 服务商加上了，页面上只看得到密钥尾号`, (await page.textContent('#providers')).includes('尾号 -key') && !(await page.content()).includes('sk-openai-test-key'));
+    const panelOverflow = await page.evaluate(() => { const r = document.querySelector('#settings .files-panel').getBoundingClientRect(); return r.left < 0 || r.right > innerWidth; });
+    check(`${label} 设置面板不超出屏幕`, !panelOverflow);
+    await page.screenshot({ path: path.join(out, `${label}-settings.png`) });
+    await page.click('#close-settings');
+    if (label === 'phone' && await page.isVisible('#scrim')) await page.click('#scrim', { position: { x: 370, y: 400 } });
+    await page.waitForFunction((m) => [...document.querySelector('#model').options].some((o) => o.textContent.startsWith(m)), `gpt-${label}`);
+    const ref = await page.evaluate((m) => [...document.querySelector('#model').options].find((o) => o.textContent.startsWith(m)).value, `gpt-${label}`);
+    await page.selectOption('#model', ref);
+    await page.click('#new-chat').catch(() => {});
+    await page.fill('#prompt', '用新模型说句话');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => [...document.querySelectorAll('.msg.agent')].some((n) => n.textContent.includes('OpenAI收到：用新模型说句话')));
+    check(`${label} 选了 OpenAI 格式的模型，回复真的来自它`, true);
+    await page.reload();
+    await page.waitForSelector('#chat:not([hidden])');
+    await page.waitForFunction(() => document.querySelector('#model').options.length >= 2);
+    check(`${label} 刷新后还记得选的模型`, (await page.inputValue('#model')) === ref);
+    check(`${label} 设置相关没有页面脚本错误`, errors.length === 0);
+    await page.close();
+  }
+  oai.server.close(); bridge.close();
   check('全程没有往外连', proxy.attempts.length === 0);
   console.log(`网页端到端 ${results.length}/${results.length} 通过；截图在 ${out}`);
 } finally {

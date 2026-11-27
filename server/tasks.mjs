@@ -41,7 +41,7 @@ export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS, onBusy = () =>
 
   return {
     get running() { return current; },
-    start({ text, sessionId = null }) {
+    start({ text, sessionId = null, model = null }) {
       if (current) return { error: '上一条还在做，等它做完或先点停止', status: 409 };
       const task = { id: crypto.randomUUID(), status: 'running', sessionId, text, events: [], listeners: new Set(), ctrl: new AbortController(), startedAt: Date.now(), pending: new Map() };
       const ask = ({ name, input, signal }) => new Promise((resolve) => {
@@ -65,7 +65,7 @@ export function createTasks({ run, askTimeoutMs = ASK_TIMEOUT_MS, onBusy = () =>
       setRunning(task.id);
       publish(task, { type: 'started' });
       Promise.resolve()
-        .then(() => run({ text, sessionId, signal: task.ctrl.signal, ask, emit: (ev) => publish(task, ev) }))
+        .then(() => run({ text, sessionId, model, signal: task.ctrl.signal, ask, emit: (ev) => publish(task, ev) }))
         .catch((e) => publish(task, { type: 'error', error: String(e?.message || e) }))
         .finally(() => {
           if (task.status === 'running') publish(task, { type: 'error', error: '任务意外结束' });

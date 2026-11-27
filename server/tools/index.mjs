@@ -8,9 +8,10 @@ import * as basic from './basic.mjs';
 
 export const MODULES = [basic];
 
-export function createToolBox(cfg, { modules = MODULES } = {}) {
+export function createToolBox(cfg, { modules = MODULES, settings = null } = {}) {
   const workspace = path.join(cfg.dataDir, 'workspace');
-  const ctx = { cfg, workspace, resolve: workspaceResolver(workspace) };
+  // settings：取其他服务（千帆等）的密钥，见 settings.mjs
+  const ctx = { cfg, workspace, settings, resolve: workspaceResolver(workspace) };
   const defs = modules.flatMap((m) => m.tools(ctx) ?? []);
   return buildToolServer(defs, ctx);
 }

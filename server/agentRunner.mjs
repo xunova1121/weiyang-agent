@@ -96,6 +96,30 @@ export function systemAppend({ commands }) {
   ].join('\n');
 }
 
+/**
+ * 这一轮连哪里：Anthropic 格式的直接连服务商；OpenAI 格式的连本机翻译服务（openaiBridge），
+ * 那时 SDK 拿到的只是内部访问码，服务商的真实密钥留在翻译服务里。
+ */
+export function connectionFor(cfg, { settings, bridge, model }) {
+  if (!settings) return { baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, model: cfg.model, ref: null };
+  const r = settings.resolve(model);
+  if (r.format === 'openai') {
+    if (!bridge) throw new Error('OpenAI 格式的翻译服务没启动');
+    return { baseUrl: `${bridge.url}/p/${r.providerId}`, apiKey: bridge.token, model: r.model, ref: r.ref };
+  }
+  return { baseUrl: r.baseUrl, apiKey: r.apiKey, model: r.model, ref: r.ref };
+}
+
+/** 模型接口的错误里，重试也不会好的那些：返回给用户看的说明；可以重试的返回 null */
+export function fatalModelError(m) {
+  const status = m.error_status;
+  if (status === 401 || m.error === 'authentication_failed') return '模型服务商说密钥不对（401）。请到“设置”里检查这个模型的密钥，服务器配置的 DeepSeek 则检查 /etc/weiyang-agent.env。';
+  if (status === 403 || m.error === 'oauth_org_not_allowed') return '模型服务商拒绝访问（403）：这个密钥没有用这个模型的权限。';
+  if (status === 402 || m.error === 'billing_error') return '模型服务商说额度不够或欠费（402），请到服务商后台看看余额。';
+  if (status === 404 || m.error === 'model_not_found') return '模型服务商说没有这个型号（404）。请到“设置”里检查型号名和接口地址。';
+  return null;
+}
+
 /** SDK 进程的环境变量：只放必需项，不继承服务器的 process.env */
 export function agentEnv(cfg, { home, extra = {} } = {}) {
   return {
@@ -140,7 +164,9 @@ function resultSummary(content) {
  * @param {{ text: string, sessionId?: string, emit: (ev: object) => void, ask: (req: object) => Promise<'allow'|'always'|'deny'>,
  *           signal?: AbortSignal, extraEnv?: object, queryImpl?: Function, toolModules?: Array }} o
  */
-export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal, extraEnv, queryImpl = query, toolModules }) {
+export async function runAgent(cfg, { text, sessionId = null, model = null, emit, ask, signal, extraEnv, queryImpl = query, toolModules, settings = null, bridge = null }) {
+  // 这一轮用哪个模型：网页上选的（provider/model），没选或不认识就用默认的；没有设置（测试里）就用服务器配置
+  const conn = connectionFor(cfg, { settings, bridge, model });
   const workspace = path.join(cfg.dataDir, 'workspace');
   const home = path.dirname(configDir(cfg)); // SDK 的对话记录存在这里（.claude/projects）
   fs.mkdirSync(workspace, { recursive: true });
@@ -150,20 +176,22 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
   if (signal?.aborted) onAbort();
   signal?.addEventListener('abort', onAbort, { once: true });
   const t0 = Date.now();
+  const stoppedOrFatal = () => (fatalReason ? { type: 'error', error: fatalReason, sessionId: current } : { type: 'stopped', sessionId: current });
   let full = '';
   let current = sessionId;
   let announced = false;
+  let fatalReason = null; // 不可重试的模型错误，停下时报这个而不是“已停止”
   const tools = [...READ_ONLY_TOOLS, ...WRITE_TOOLS, ...(cfg.commands ? COMMAND_TOOLS : [])];
   // 自定义工具（联网搜索、记忆、文档……）：每轮新建一份，见 tools/
-  const toolBox = createToolBox(cfg, toolModules ? { modules: toolModules } : undefined);
+  const toolBox = createToolBox(cfg, { ...(toolModules && { modules: toolModules }), settings });
   let streamedThisMessage = false; // 有逐字推送时，整条 assistant 消息里的文字就不再重复推
   try {
     const q = queryImpl({
       prompt: text,
       options: {
         cwd: workspace,
-        env: agentEnv(cfg, { home, extra: extraEnv }),
-        model: cfg.model,
+        env: agentEnv({ ...cfg, ...conn }, { home, extra: extraEnv }),
+        model: conn.model,
         settingSources: [], // 不读服务器上任何 ~/.claude 或项目里的设置、规则
         systemPrompt: { type: 'preset', preset: 'claude_code', append: systemAppend({ commands: Boolean(cfg.commands) }) },
         tools,
@@ -200,6 +228,9 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         // 模型接口出错时 SDK 会悄悄退避重试，不说出来就像卡死了：写进日志，也告诉网页
         const why = m.error_status ? `状态码 ${m.error_status}` : m.no_response ? `${Math.round(m.no_response.waited_ms / 1000)} 秒没回应` : String(m.error || '连不上');
         console.warn(`[模型重试] 第 ${m.attempt}/${m.max_retries} 次，${why}（${m.error || ''}），${Math.round((m.retry_delay_ms || 0) / 1000)} 秒后再试`);
+        // 重试也没用的错（密钥不对、没权限、型号不对、欠费）：马上停下并说清楚，不让人干等几分钟
+        const fatal = fatalModelError(m);
+        if (fatal) { fatalReason = fatal; abortController.abort(); continue; }
         emit({ type: 'notice', text: `模型那边出错（${why}），正在第 ${m.attempt} 次重试…` });
         continue;
       }
@@ -230,7 +261,7 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         }
       } else if (m.type === 'result') {
         // 用户点了停止：不管 SDK 最后报的是什么，都算“已停止”
-        if (abortController.signal.aborted) { emit({ type: 'stopped', sessionId: current }); return; }
+        if (abortController.signal.aborted) { emit(stoppedOrFatal()); return; }
         if (m.subtype !== 'success' || m.is_error) {
           const detail = Array.isArray(m.errors) && m.errors.length ? m.errors.join('；').slice(0, 300) : '';
           if (detail) console.warn('[智能体出错]', detail);
@@ -242,10 +273,10 @@ export async function runAgent(cfg, { text, sessionId = null, emit, ask, signal,
         return;
       }
     }
-    if (abortController.signal.aborted) emit({ type: 'stopped', sessionId: current });
+    if (abortController.signal.aborted) emit(stoppedOrFatal());
     else emit({ type: 'error', error: '智能体没有给出结果就结束了', sessionId: current });
   } catch (error) {
-    if (abortController.signal.aborted) emit({ type: 'stopped', sessionId: current });
+    if (abortController.signal.aborted) emit(stoppedOrFatal());
     else emit({ type: 'error', error: String(error?.message || error).slice(0, 500), sessionId: current });
   } finally {
     signal?.removeEventListener('abort', onAbort);

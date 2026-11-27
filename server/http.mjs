@@ -15,6 +15,11 @@
  *   POST /api/files/upload?dir=&name= 上传（请求体就是文件内容，最多 20MB；重名自动加序号）
  *   DELETE /api/files?path=
  *   GET  /api/health                  不用登录，只回 {ok:true}
+ *   GET  /api/settings                设置（密钥只显示尾号）；GET /api/models 可选的模型
+ *   POST /api/settings/providers      {id?, name, format, baseUrl, apiKey?, models}  加或改服务商（apiKey 留空=不变）
+ *   DELETE /api/settings/providers/:id
+ *   POST /api/settings/default        {model}
+ *   POST /api/settings/services/:id   {key}（key 为 null 表示清除）
  *   GET  /api/status
  * 其余 GET 请求返回 web/ 下的静态网页。除登录和网页外都要 Authorization: Bearer <令牌>。
  */
@@ -83,7 +88,7 @@ function attachment(name) {
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
-export function createHttpServer({ auth, tasks, cfg, sessions, files }) {
+export function createHttpServer({ auth, tasks, cfg, sessions, files, settings = null }) {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://local');
     const { pathname } = url;
@@ -101,9 +106,19 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files }) {
         if (pathname === '/api/logout' && req.method === 'POST') { auth.logout(token); return json(res, 200, { ok: true }); }
         if (pathname === '/api/status' && req.method === 'GET') {
           const running = tasks.running && tasks.get(tasks.running);
-          return json(res, 200, { ok: true, model: cfg.model, commands: Boolean(cfg.commands), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
+          return json(res, 200, { ok: true, model: settings ? settings.defaultModel() : cfg.model, commands: Boolean(cfg.commands), running: running ? { id: running.id, sessionId: running.sessionId, text: running.text } : null });
         }
         if (pathname === '/api/sessions' && req.method === 'GET') return json(res, 200, await sessions.list());
+        if (settings && pathname.startsWith('/api/settings') || settings && pathname === '/api/models') {
+          if (pathname === '/api/models' && req.method === 'GET') return json(res, 200, { models: settings.models().map(({ ref, provider, model }) => ({ ref, provider, model })), default: settings.defaultModel() });
+          if (pathname === '/api/settings' && req.method === 'GET') return json(res, 200, settings.publicView());
+          if (pathname === '/api/settings/providers' && req.method === 'POST') { const r = settings.saveProvider(await readJson(req)); return r.error ? json(res, 400, r) : json(res, 200, r); }
+          const pm = pathname.match(/^\/api\/settings\/providers\/([\w-]{1,40})$/);
+          if (pm && req.method === 'DELETE') return settings.removeProvider(pm[1]) ? json(res, 200, { ok: true }) : json(res, 404, { error: '没有这个服务商（服务器配置的 DeepSeek 不能删）' });
+          if (pathname === '/api/settings/default' && req.method === 'POST') return settings.setDefault(String((await readJson(req)).model ?? '')) ? json(res, 200, { ok: true }) : json(res, 400, { error: '没有这个模型' });
+          const sm2 = pathname.match(/^\/api\/settings\/services\/([\w-]{1,40})$/);
+          if (sm2 && req.method === 'POST') { const r = settings.setService(sm2[1], (await readJson(req)).key); return r.error ? json(res, 400, r) : json(res, 200, r); }
+        }
         if (pathname === '/api/files' && req.method === 'GET') {
           const r = files.list(url.searchParams.get('path') || '');
           return r ? json(res, 200, r) : json(res, 404, { error: '没有这个文件夹' });
@@ -138,7 +153,9 @@ export function createHttpServer({ auth, tasks, cfg, sessions, files }) {
           if (!text) return json(res, 400, { error: '消息是空的' });
           if (text.length > 20_000) return json(res, 413, { error: '消息太长（最多 2 万字）' });
           const sessionId = typeof body.sessionId === 'string' && /^[\w-]{1,80}$/.test(body.sessionId) ? body.sessionId : null;
-          const r = tasks.start({ text, sessionId });
+          // 选的模型（provider/model）；不认识的就用默认模型，由 settings.resolve 兜底
+          const model = typeof body.model === 'string' && body.model.length <= 160 ? body.model : null;
+          const r = tasks.start({ text, sessionId, model });
           if (r.error) return json(res, r.status, { error: r.error });
           if (/text\/event-stream/.test(String(req.headers.accept || ''))) return streamTask(req, res, tasks, r.task.id, 0, { type: 'task_created', id: r.task.id });
           return json(res, 200, r.task);

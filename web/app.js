@@ -10,6 +10,7 @@ const store = {
 };
 const TOKEN = 'weiyang-agent.token';
 const SESSION = 'weiyang-agent.session';
+const MODEL = 'weiyang-agent.model';
 const IDLE_MS = 45_000;
 const RETRY_MS = [1000, 2000, 4000, 8000, 8000];
 
@@ -216,7 +217,7 @@ async function run(start) {
 function send(text) {
   add('msg user', text);
   return run(async () => {
-    const res = await api('/api/tasks', { method: 'POST', body: { text, sessionId }, headers: { Accept: 'text/event-stream' }, signal: current.ctrl.signal });
+    const res = await api('/api/tasks', { method: 'POST', body: { text, sessionId, model: $('model').value || null }, headers: { Accept: 'text/event-stream' }, signal: current.ctrl.signal });
     if (!res.ok) { add('msg agent error', (await res.json().catch(() => ({}))).error || `服务器返回 ${res.status}`); return; }
     await follow(await readStream(res, current.ctrl));
   });
@@ -391,6 +392,123 @@ async function upload(list) {
 function openFiles() { $('files').hidden = false; loadFiles(); }
 function closeFiles() { $('files').hidden = true; }
 
+/* ---------- 模型与设置 ---------- */
+async function loadModels() {
+  const res = await api('/api/models').catch(() => null);
+  if (!res?.ok) return;
+  const { models, default: def } = await res.json();
+  const opts = (sel, chosen) => {
+    sel.replaceChildren(...models.map((m) => { const o = document.createElement('option'); o.value = m.ref; o.textContent = `${m.model}（${m.provider}）`; return o; }));
+    sel.value = models.some((m) => m.ref === chosen) ? chosen : def;
+  };
+  opts($('model'), store.get(MODEL));
+  opts($('default-model'), def);
+}
+
+let presets = [];
+async function loadSettings() {
+  const res = await api('/api/settings').catch(() => null);
+  if (!res?.ok) return;
+  const st = await res.json();
+  presets = st.presets;
+  $('pf-preset').replaceChildren(new Option('（自己填）', ''), ...presets.map((p) => new Option(p.name, p.id)));
+  $('providers').replaceChildren(...st.providers.map((p) => {
+    const li = document.createElement('li');
+    li.className = 'prov';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = `${p.name}：${p.models.join('、')}`;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${p.format === 'openai' ? 'OpenAI 格式' : 'Anthropic 兼容'} · ${p.key || '没填密钥'}`;
+    li.append(name, meta);
+    if (!p.fixed) {
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.className = 'mini'; edit.textContent = '✎'; edit.title = '修改'; edit.setAttribute('aria-label', '修改');
+      edit.addEventListener('click', () => fillProvider(p));
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'mini'; del.textContent = '🗑'; del.title = '删除'; del.setAttribute('aria-label', '删除');
+      del.addEventListener('click', async () => {
+        if (del.dataset.armed !== '1') { del.dataset.armed = '1'; del.textContent = '确认删除？'; setTimeout(() => { del.dataset.armed = ''; del.textContent = '🗑'; }, 3000); return; }
+        await api(`/api/settings/providers/${p.id}`, { method: 'DELETE' }).catch(() => null);
+        loadSettings(); loadModels();
+      });
+      li.append(edit, del);
+    } else {
+      const tag = document.createElement('span');
+      tag.className = 'meta';
+      tag.textContent = '服务器配置';
+      li.append(tag);
+    }
+    return li;
+  }));
+  $('services').replaceChildren(...st.services.map((sv) => {
+    const li = document.createElement('li');
+    const box = document.createElement('div');
+    box.className = 'svc';
+    const title = document.createElement('span');
+    title.textContent = `${sv.name}${sv.key ? '：' + sv.key : '：没填'}`;
+    const row = document.createElement('div');
+    row.className = 'row';
+    const input = document.createElement('input');
+    input.type = 'password'; input.autocomplete = 'off'; input.placeholder = sv.hint || '密钥'; input.setAttribute('aria-label', sv.name + ' 密钥');
+    const save = document.createElement('button');
+    save.type = 'button'; save.textContent = '保存';
+    save.addEventListener('click', async () => { if (!input.value.trim()) return; await api(`/api/settings/services/${sv.id}`, { method: 'POST', body: { key: input.value.trim() } }).catch(() => null); loadSettings(); });
+    row.append(input, save);
+    if (sv.key) {
+      const clear = document.createElement('button');
+      clear.type = 'button'; clear.className = 'ghost'; clear.textContent = '清除';
+      clear.addEventListener('click', async () => { await api(`/api/settings/services/${sv.id}`, { method: 'POST', body: { key: null } }).catch(() => null); loadSettings(); });
+      row.append(clear);
+    }
+    box.append(title, row);
+    li.append(box);
+    return li;
+  }));
+}
+
+function fillProvider(p) {
+  $('provider-form-box').open = true;
+  $('pf-id').value = p?.id || '';
+  $('pf-preset').value = '';
+  $('pf-name').value = p?.name || '';
+  $('pf-format').value = p?.format || 'anthropic';
+  $('pf-url').value = p?.baseUrl || '';
+  $('pf-key').value = '';
+  $('pf-key').placeholder = p ? `${p.key}；留空表示不变` : '填密钥';
+  $('pf-models').value = p?.models?.join(', ') || '';
+  $('pf-error').textContent = '';
+  $('pf-hint').textContent = '';
+}
+
+$('pf-preset').addEventListener('change', () => {
+  const p = presets.find((x) => x.id === $('pf-preset').value);
+  if (!p) return;
+  $('pf-name').value = p.name;
+  $('pf-format').value = p.format;
+  $('pf-url').value = p.baseUrl;
+  $('pf-hint').textContent = p.verified ? '' : '这个地址是从公开资料整理的，请以服务商官方文档为准；型号名也请照官方文档填。';
+});
+$('pf-cancel').addEventListener('click', () => { fillProvider(null); $('provider-form-box').open = false; });
+$('provider-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = { id: $('pf-id').value || undefined, name: $('pf-name').value, format: $('pf-format').value, baseUrl: $('pf-url').value, apiKey: $('pf-key').value, models: $('pf-models').value };
+  const res = await api('/api/settings/providers', { method: 'POST', body }).catch(() => null);
+  if (!res?.ok) { $('pf-error').textContent = (await res?.json().catch(() => ({})))?.error || '保存失败'; return; }
+  fillProvider(null);
+  $('provider-form-box').open = false;
+  await loadSettings();
+  await loadModels();
+});
+$('default-model').addEventListener('change', async () => {
+  await api('/api/settings/default', { method: 'POST', body: { model: $('default-model').value } }).catch(() => null);
+});
+$('model').addEventListener('change', () => store.set(MODEL, $('model').value));
+$('open-settings').addEventListener('click', () => { closeSide(); $('settings').hidden = false; loadSettings(); loadModels(); });
+$('close-settings').addEventListener('click', () => { $('settings').hidden = true; });
+$('settings').addEventListener('click', (e) => { if (e.target === $('settings')) $('settings').hidden = true; });
+
 /* ---------- 侧栏（手机上是抽屉） ---------- */
 function openSide() { $('side').classList.add('open'); $('scrim').hidden = false; $('toggle-side').setAttribute('aria-expanded', 'true'); }
 function closeSide() { $('side').classList.remove('open'); $('scrim').hidden = true; $('toggle-side').setAttribute('aria-expanded', 'false'); }
@@ -428,6 +546,7 @@ $('logout').addEventListener('click', async () => { await api('/api/logout', { m
 
 async function enter() {
   show('chat');
+  loadModels();
   let st = null;
   try { const res = await api('/api/status'); if (res.ok) st = await res.json(); } catch { return; }
   await refreshList();

@@ -40,6 +40,10 @@ export function startFakeModel() {
       return res.end('{"type":"error","error":{"type":"not_found_error","message":"not here"}}');
     }
     const last = lastUserText(j.messages || []);
+    if (/密钥错测试/.test(last.text || '')) {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      return res.end('{"type":"error","error":{"type":"authentication_error","message":"Authentication Fails, Your api key: ****4e55 is invalid"}}');
+    }
     if (/模型出错/.test(last.text || '')) {
       res.writeHead(500, { 'content-type': 'application/json' });
       return res.end('{"type":"error","error":{"type":"api_error","message":"fake upstream failure"}}');
