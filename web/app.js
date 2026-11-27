@@ -760,6 +760,36 @@ function speakButton(bubble) {
   return b;
 }
 
+/* ---------- 装成应用（PWA） ---------- */
+// 后台脚本只管网页本身，先问服务器要最新的（见 sw.js）；https 或本机才能用
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('/sw.js').catch(() => {});
+const installed = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  // 安卓 Chrome、电脑 Chrome / Edge：浏览器允许装时才出现按钮
+  e.preventDefault();
+  installPrompt = e;
+  $('install').hidden = installed();
+});
+window.addEventListener('appinstalled', () => { $('install').hidden = true; $('install-hint').hidden = true; installPrompt = null; });
+// 苹果手机的 Safari 不给按钮，只能手动“添加到主屏幕”；微信里打不开安装，要先用系统浏览器打开
+const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const wechat = /MicroMessenger/i.test(navigator.userAgent);
+if (!installed() && (ios || wechat)) $('install').hidden = false;
+$('install').addEventListener('click', async () => {
+  if (installPrompt) {
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice.catch(() => ({}));
+    if (outcome === 'accepted') $('install').hidden = true;
+    installPrompt = null;
+    return;
+  }
+  $('install-hint').textContent = wechat
+    ? '微信里装不了：点右上角“…”→“在浏览器打开”，再在浏览器里装。'
+    : ios ? '点 Safari 下方的“分享”按钮 →“添加到主屏幕”。' : '点浏览器菜单里的“安装应用”或“添加到主屏幕”。';
+  $('install-hint').hidden = false;
+});
+
 async function enter() {
   show('chat');
   loadModels();

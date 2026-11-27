@@ -94,6 +94,7 @@ button.danger { background: var(--danger); color: #fff; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; max-height: 40vh; overflow-y: auto; padding: 4px 0; }
 .chips label { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; cursor: pointer; overflow-wrap: anywhere; }
 .pform .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.install-hint { font-size: 13px; margin: 0; overflow-wrap: anywhere; }
 .model-bar > label[for=model] { white-space: nowrap; flex: none; }
 .model-bar select { flex: 0 1 auto; min-width: 0; }
 .model-bar .think { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; cursor: pointer; }

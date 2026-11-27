@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>未央 Agent 版</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-180.png">
+<meta name="theme-color" content="#2f6b5a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="未央">
 </head>
 <body>
   <main id="login" class="login" hidden>
@@ -23,6 +29,8 @@
       </div>
       <ul id="sessions" class="sessions"></ul>
       <p id="sessions-empty" class="muted" hidden>还没有对话</p>
+      <button id="install" type="button" class="ghost" hidden>📲 装到桌面</button>
+      <p id="install-hint" class="muted install-hint" hidden></p>
       <button id="open-settings" type="button" class="ghost">⚙ 设置</button>
       <button id="logout" type="button" class="ghost">退出登录</button>
     </aside>

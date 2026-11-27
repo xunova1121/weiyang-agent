@@ -275,6 +275,59 @@ try {
     check(`${label} 上传、语音没有页面脚本错误`, errors.length === 0);
     await page.close();
   }
+  // 装成应用（PWA）：说明文件和图标、Chromium 的“能不能安装”检查、后台脚本接管后聊天照样实时出字、不缓存 /api、断网还能打开页面
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    const man = await fetch(base + '/manifest.webmanifest');
+    const manifest = await man.json();
+    check('应用说明文件：类型对，名字、启动页、独立窗口、图标都有', man.headers.get('content-type') === 'application/manifest+json' && manifest.short_name === '未央' && manifest.start_url === '/' && manifest.display === 'standalone' && manifest.icons.some((i) => i.purpose === 'maskable'));
+    for (const ic of manifest.icons) {
+      const buf = Buffer.from(await (await fetch(base + ic.src)).arrayBuffer());
+      const [w, h] = [buf.readUInt32BE(16), buf.readUInt32BE(20)];
+      check(`图标 ${ic.src} 是 ${ic.sizes} 的 PNG`, buf.subarray(1, 4).toString() === 'PNG' && `${w}x${h}` === ic.sizes);
+    }
+    await page.goto(base);
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await page.reload();
+    check('后台脚本已接管页面', await page.evaluate(() => Boolean(navigator.serviceWorker.controller)));
+    const cdp = await ctx.newCDPSession(page);
+    const inst = await cdp.send('Page.getInstallabilityErrors');
+    check(`Chromium 检查：能装成应用（问题：${JSON.stringify(inst.installabilityErrors)}）`, inst.installabilityErrors.length === 0);
+    if (await page.isVisible('#login-form')) { await page.fill('#password', cfg.password); await page.click('#login-form button'); }
+    await page.waitForSelector('#chat:not([hidden])');
+    check('普通电脑浏览器里不多显示“装到桌面”说明', !(await page.isVisible('#install-hint')));
+    await page.click('#new-chat').catch(() => {});
+    await page.fill('#prompt', '装成应用后说句话');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => [...document.querySelectorAll('.msg.agent')].some((n) => n.textContent.includes('收到：装成应用后说句话')));
+    check('后台脚本接管后，聊天照样实时出字', true);
+    const cached = await page.evaluate(async () => (await (await caches.open('weiyang-shell-v1')).keys()).map((r) => new URL(r.url).pathname));
+    check(`缓存里只有网页本身，没有 /api（${cached.join(' ')}）`, cached.includes('/') && !cached.some((u) => u.startsWith('/api')));
+    await ctx.setOffline(true);
+    await page.reload().catch(() => {});
+    check('断网时还能打开页面（用上次存下的）', await page.evaluate(() => Boolean(document.querySelector('#chat') && document.querySelector('#login'))));
+    await ctx.setOffline(false);
+    check('装成应用相关没有页面脚本错误', errors.length === 0);
+    await ctx.close();
+  }
+  for (const [who, ua, want] of [
+    ['苹果手机 Safari', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1', '分享'],
+    ['微信里', 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36 MicroMessenger/8.0.50', '在浏览器打开']
+  ]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, userAgent: ua });
+    const page = await ctx.newPage();
+    await page.goto(base);
+    if (await page.isVisible('#login-form')) { await page.fill('#password', cfg.password); await page.click('#login-form button'); }
+    await page.waitForSelector('#chat:not([hidden])');
+    await page.click('#toggle-side');
+    await page.waitForSelector('#install:not([hidden])');
+    await page.click('#install');
+    check(`${who}：“装到桌面”给出手动步骤`, (await page.textContent('#install-hint')).includes(want));
+    await ctx.close();
+  }
   ds.server.close();
   oai.server.close(); bridge.close();
   check('全程没有往外连', proxy.attempts.length === 0);
