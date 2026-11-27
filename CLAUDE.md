@@ -1,6 +1,7 @@
 # 未央 Agent 版 开发约定
 
-> **当前状态（2026-11-27）**：第一版三批完成（对话、确认框、沙箱运行命令、工作文件夹文件管理、Docker 部署）。已装到用户服务器（OpenCloudOS + 宝塔，e.leing.top，本机 8797），接真实 DeepSeek 冒烟检查 6/6 通过，沙箱可用。服务器每 30 分钟自动更新 stable 分支：**推到 main 后 GitHub 测试全过才进 stable，推之前本地 npm test 必须全过**。
+> **当前状态（2026-11-27）**：第一版三批 + 工具批全部推上 main：自定义工具底座、设置页多模型（含 OpenAI 格式翻译）、联网搜索（DeepSeek 联网 / 读网页 / 百度千帆）、长期记忆、识图和语音、Word/PPT/Excel/PDF（原未央文档引擎，`server/docs/` 原样复制，不在这里单独改）。已装到用户服务器（e.leing.top，本机 8797），每 30 分钟自动更新 stable：**推到 main 后 GitHub 测试全过才进 stable，推之前本地 npm test 必须全过**。
+> 未验收：真实千帆、DeepSeek 联网 / 识图 / 语音的效果；服务器上没装 LibreOffice 时 PDF 只出可打印网页。待做：Anthropic 文档技能（Apache 2.0）作补充。
 
 和原来的未央（仓库 `xunova1121/-`）完全独立：账号、数据、代码都不共用，也不改动原未央。
 
